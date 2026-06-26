@@ -1,8 +1,9 @@
 name: sast
 
 # Static analysis (SAST) of the Keycloak MFA/SMS provider source with OpenGrep
-# (the OSS, Apache-2.0 Semgrep fork). Gates on ERROR-severity findings; reports the rest
-# as SARIF (Security tab, with GHAS) + an artifact.
+# (the OSS, Apache-2.0 Semgrep fork). Report-only: surfaces findings as SARIF (Security tab,
+# with GHAS) + an artifact, non-blocking. SAST false-positives on existing code (Spring rules
+# misfire on non-Spring Keycloak SPIs); triage, then ratchet to gating with a tuned ruleset.
 
 on:
   pull_request:
@@ -33,11 +34,6 @@ jobs:
         run: |
           opengrep scan --config /tmp/ogr/java --config /tmp/ogr/generic \
             --sarif --output opengrep.sarif . || true
-
-      - name: OpenGrep — GATE on ERROR-severity findings
-        run: |
-          opengrep scan --config /tmp/ogr/java --config /tmp/ogr/generic \
-            --severity ERROR --error .
 
       - name: Upload OpenGrep SARIF
         if: always()
