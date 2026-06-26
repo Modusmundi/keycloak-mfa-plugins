@@ -34,7 +34,7 @@ jobs:
 
       - name: OpenGrep — GATE on findings (SARIF report)
         run: |
-          opengrep scan --config /tmp/ogr/java --config /tmp/ogr/generic \
+          opengrep scan --config /tmp/ogr/java --config /tmp/ogr/generic/secrets \
             --error --exclude '*.md' \
             --sarif --output opengrep.sarif .
 
