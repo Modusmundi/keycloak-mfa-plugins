@@ -1,0 +1,56 @@
+name: sast
+
+# Static analysis (SAST) of the Keycloak MFA/SMS provider source with OpenGrep
+# (the OSS, Apache-2.0 Semgrep fork). Gates on ERROR-severity findings; reports the rest
+# as SARIF (Security tab, with GHAS) + an artifact.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write   # SARIF upload → Security tab
+
+jobs:
+  opengrep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenGrep (pinned, cosign-signed binary)
+        run: |
+          curl -fsSL https://github.com/opengrep/opengrep/releases/download/v1.23.0/opengrep_manylinux_x86 -o /usr/local/bin/opengrep
+          chmod +x /usr/local/bin/opengrep
+          opengrep --version
+
+      - name: Fetch OpenGrep OSS rules (java + generic)
+        run: git clone --depth 1 https://github.com/opengrep/opengrep-rules.git /tmp/ogr
+
+      - name: OpenGrep — report all findings (SARIF, non-gating)
+        run: |
+          opengrep scan --config /tmp/ogr/java --config /tmp/ogr/generic \
+            --sarif --output opengrep.sarif . || true
+
+      - name: OpenGrep — GATE on ERROR-severity findings
+        run: |
+          opengrep scan --config /tmp/ogr/java --config /tmp/ogr/generic \
+            --severity ERROR --error .
+
+      - name: Upload OpenGrep SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: opengrep.sarif
+          category: opengrep
+
+      - name: Upload OpenGrep report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opengrep-sast
+          path: opengrep.sarif
+          if-no-files-found: ignore
