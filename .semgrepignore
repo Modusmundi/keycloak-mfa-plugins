@@ -1,0 +1,5 @@
+# OpenGrep / Semgrep ignore (read by `opengrep scan`).
+# SAST analyzes code, not documentation. Example tokens / secrets in Markdown (READMEs) are
+# illustrative, not real credentials — exclude docs so they never gate the build.
+# (The example activation-token JWTs in app-authenticator/README.md are expired dev-realm tokens.)
+*.md

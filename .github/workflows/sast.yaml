@@ -1,9 +1,9 @@
 name: sast
 
 # Static analysis (SAST) of the Keycloak MFA/SMS provider source with OpenGrep
-# (the OSS, Apache-2.0 Semgrep fork). Report-only: surfaces findings as SARIF (Security tab,
-# with GHAS) + an artifact, non-blocking. SAST false-positives on existing code (Spring rules
-# misfire on non-Spring Keycloak SPIs); triage, then ratchet to gating with a tuned ruleset.
+# (the OSS, Apache-2.0 Semgrep fork). GATES on findings, with a tuned ruleset: java/spring is
+# dropped (it false-matches non-Spring Keycloak SPIs) and Markdown is excluded (.semgrepignore +
+# --exclude — doc example tokens are not real secrets). Findings → SARIF (Security tab) + artifact.
 
 on:
   pull_request:
@@ -27,13 +27,16 @@ jobs:
           chmod +x /usr/local/bin/opengrep
           opengrep --version
 
-      - name: Fetch OpenGrep OSS rules (java + generic)
-        run: git clone --depth 1 https://github.com/opengrep/opengrep-rules.git /tmp/ogr
+      - name: Fetch OpenGrep OSS rules (drop the spring pack)
+        run: |
+          git clone --depth 1 https://github.com/opengrep/opengrep-rules.git /tmp/ogr
+          rm -rf /tmp/ogr/java/spring   # false-matches non-Spring Keycloak SPIs
 
-      - name: OpenGrep — report all findings (SARIF, non-gating)
+      - name: OpenGrep — GATE on findings (SARIF report)
         run: |
           opengrep scan --config /tmp/ogr/java --config /tmp/ogr/generic \
-            --sarif --output opengrep.sarif . || true
+            --error --exclude '*.md' \
+            --sarif --output opengrep.sarif .
 
       - name: Upload OpenGrep SARIF
         if: always()
