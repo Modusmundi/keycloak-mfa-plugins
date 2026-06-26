@@ -82,6 +82,17 @@ public class SmsAuthenticator implements Authenticator, CredentialValidator<SmsA
 			return;
 		}
 
+		// Fail cleanly (not with a 500/NPE) if this execution has no authenticator config — e.g. the SMS
+		// authenticator was added to the flow without an 'sms-2fa' config, so length/ttl are absent.
+		if (config == null || config.getConfig() == null
+				|| config.getConfig().get("length") == null || config.getConfig().get("ttl") == null) {
+			logger.error("SMS authenticator is missing its configuration (length/ttl); add an authenticator config to the flow execution.");
+			context.failureChallenge(AuthenticationFlowError.INTERNAL_ERROR,
+				context.form().setError("smsAuthSmsNotSent", "Error. Use another method.")
+					.createErrorPage(Response.Status.INTERNAL_SERVER_ERROR));
+			return;
+		}
+
 		int length = Integer.parseInt(config.getConfig().get("length"));
 		int ttl = Integer.parseInt(config.getConfig().get("ttl"));
 
@@ -122,6 +133,14 @@ public class SmsAuthenticator implements Authenticator, CredentialValidator<SmsA
 		if (code == null || ttl == null) {
 			context.failureChallenge(AuthenticationFlowError.INTERNAL_ERROR,
 				context.form().createErrorPage(Response.Status.INTERNAL_SERVER_ERROR));
+			return;
+		}
+
+		// No code submitted (missing/blank 'code' form param, e.g. a malformed POST): re-prompt instead
+		// of dereferencing null. Not counted as a brute-force failure — an empty submission is not a
+		// credential guess, and counting it would let blank posts lock a user out.
+		if (enteredCode == null || enteredCode.isBlank()) {
+			context.challenge(context.form().setError("smsAuthCodeInvalid").createForm(TPL_CODE));
 			return;
 		}
 

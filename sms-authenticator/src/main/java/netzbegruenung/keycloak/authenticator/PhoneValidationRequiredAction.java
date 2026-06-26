@@ -60,6 +60,11 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 			AuthenticationSessionModel authSession = context.getAuthenticationSession();
 			// TODO: get the alias from somewhere else or move config into realm or application scope
 			AuthenticatorConfigModel config = context.getRealm().getAuthenticatorConfigByAlias("sms-2fa");
+			if (config == null || config.getConfig() == null) {
+				logger.error("No authenticator config alias 'sms-2fa' found; cannot send the validation SMS.");
+				context.failure();
+				return;
+			}
 
 			String mobileNumber = authSession.getAuthNote("mobile_number");
 			logger.infof("Validating phone number: %s of user: %s", mobileNumber, user.getUsername());

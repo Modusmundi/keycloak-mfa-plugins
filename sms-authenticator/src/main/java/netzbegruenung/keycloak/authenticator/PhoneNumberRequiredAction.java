@@ -139,7 +139,9 @@ public class PhoneNumberRequiredAction implements RequiredActionProvider, Creden
 	 */
 	public List<Map<String, String>> getCountryCodeList(RequiredActionContext context) {
 		AuthenticatorConfigModel config = context.getRealm().getAuthenticatorConfigByAlias("sms-2fa");
-		String countryCodeList = config.getConfig().getOrDefault("countryCodeList", "");
+		// No 'sms-2fa' config → fall back to the full country list instead of NPEing on the form render.
+		String countryCodeList = (config == null || config.getConfig() == null)
+			? "" : config.getConfig().getOrDefault("countryCodeList", "");
 
 		UserModel user = context.getUser();
 		KeycloakSession session = context.getSession();
