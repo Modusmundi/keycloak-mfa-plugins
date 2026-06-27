@@ -31,11 +31,13 @@ import org.keycloak.authentication.RequiredActionContext;
 import org.keycloak.authentication.RequiredActionProvider;
 import org.keycloak.common.util.SecretGenerator;
 import org.keycloak.credential.CredentialProvider;
+import org.keycloak.events.Errors;
 import org.keycloak.models.AuthenticatorConfigModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserCredentialModel;
 import org.keycloak.models.UserModel;
+import org.keycloak.services.managers.BruteForceProtector;
 import org.keycloak.sessions.AuthenticationSessionModel;
 import org.keycloak.theme.Theme;
 
@@ -63,6 +65,10 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 			if (config == null || config.getConfig() == null) {
 				logger.error("No authenticator config alias 'sms-2fa' found; cannot send the validation SMS.");
 				context.failure();
+				return;
+			}
+			// Do not issue a new validation code to a user already locked out by brute-force protection.
+			if (isDisabledByBruteForce(context)) {
 				return;
 			}
 
@@ -95,6 +101,10 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 
 	@Override
 	public void processAction(RequiredActionContext context) {
+		// Reject further attempts once brute-force protection has temporarily disabled the account.
+		if (isDisabledByBruteForce(context)) {
+			return;
+		}
 		String enteredCode = context.getHttpRequest().getDecodedFormParameters().getFirst("code");
 
 		AuthenticationSessionModel authSession = context.getAuthenticationSession();
@@ -125,8 +135,42 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 			handlePhoneToAttribute(context, mobileNumber);
 			context.success();
 		} else {
-			// invalid or expired
+			// A genuinely wrong code counts toward brute-force lockout (parity with the login SMS
+			// challenge); an expired-but-correct code does not — it is not a credential guess.
+			if (!isValid) {
+				recordBruteForceFailure(context);
+			}
 			handleInvalidSmsCode(context);
+		}
+	}
+
+	/**
+	 * Returns true (and fails the action) if brute-force protection has temporarily disabled the user —
+	 * mirrors SmsAuthenticator so the enrollment SMS-validation step can't be guessed without limit.
+	 */
+	private boolean isDisabledByBruteForce(RequiredActionContext context) {
+		RealmModel realm = context.getRealm();
+		UserModel user = context.getUser();
+		if (realm.isBruteForceProtected() && user != null
+				&& context.getSession().getProvider(BruteForceProtector.class)
+					.isTemporarilyDisabled(context.getSession(), realm, user)) {
+			context.getEvent().user(user).error(Errors.USER_TEMPORARILY_DISABLED);
+			context.failure();
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Records a failed enrollment-validation attempt with the realm brute-force protector so repeated
+	 * wrong codes count toward lockout (null category = user-level, same as the login SMS challenge).
+	 */
+	private void recordBruteForceFailure(RequiredActionContext context) {
+		RealmModel realm = context.getRealm();
+		UserModel user = context.getUser();
+		if (realm.isBruteForceProtected() && user != null) {
+			context.getSession().getProvider(BruteForceProtector.class)
+				.failedLogin(realm, user, context.getConnection(), context.getUriInfo(), null);
 		}
 	}
 
