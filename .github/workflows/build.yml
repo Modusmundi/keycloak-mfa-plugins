@@ -33,3 +33,4 @@ jobs:
         with:
           name: packages
           path: staging
+          retention-days: 7

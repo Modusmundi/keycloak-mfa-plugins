@@ -1,0 +1,14 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "pinDigests": true,
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Auto-merge PATCH + digest updates once CI passes — this covers the Keycloak <keycloak.version> patch line (pom.xml property drives org.keycloak:* deps) and the SHA-pinned GitHub Actions (# tag comments). Minor/major stay manual PRs.",
+      "matchManagers": ["maven", "github-actions"],
+      "matchUpdateTypes": ["patch", "digest", "pinDigest"],
+      "automerge": true
+    }
+  ]
+}

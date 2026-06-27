@@ -53,3 +53,4 @@ jobs:
           name: opengrep-sast
           path: opengrep.sarif
           if-no-files-found: ignore
+          retention-days: 30
