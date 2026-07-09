@@ -154,7 +154,9 @@ public class SmsAuthenticator implements Authenticator, CredentialValidator<SmsA
 			return;
 		}
 
-		boolean isValid = enteredCode.equals(code);
+		boolean isValid = java.security.MessageDigest.isEqual(
+			code.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+			enteredCode.getBytes(java.nio.charset.StandardCharsets.UTF_8));
 		if (isValid) {
 			if (Long.parseLong(ttl) < System.currentTimeMillis()) {
 				// expired

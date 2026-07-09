@@ -124,7 +124,9 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 			return;
 		}
 
-		boolean isValid = enteredCode.equals(code);
+		boolean isValid = java.security.MessageDigest.isEqual(
+			code.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+			enteredCode.getBytes(java.nio.charset.StandardCharsets.UTF_8));
 		if (isValid && Long.parseLong(ttl) > System.currentTimeMillis()) {
 			// valid
 			SmsAuthCredentialProvider smnp = (SmsAuthCredentialProvider) context.getSession().getProvider(CredentialProvider.class, "mobile-number");
