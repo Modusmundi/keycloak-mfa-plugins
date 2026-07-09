@@ -1,6 +1,6 @@
-# This workflow will build a Java project with Maven, and cache/restore any dependencies to improve the workflow execution time
-# For more information see: https://help.github.com/actions/language-and-framework-guides/building-and-testing-java-with-maven
-# https://github.com/actions/create-release
+# Build a Java project with Maven and publish the provider jars as a signed GitHub Release.
+# Triggered by a v* tag. Each jar is cosign keyless-signed (Fulcio/Rekor) so a downstream consumer
+# can verify it was built by THIS workflow at THIS tag, not merely match a co-hosted checksum.
 
 name: Release
 
@@ -17,14 +17,27 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write   # cosign keyless (Fulcio/Rekor)
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - name: Download math result for job 2
+        with:
+          persist-credentials: false
+      - name: Download built jars
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: packages
           path: staging
-      - name: "Create release"
-        run: gh release create ${GITHUB_REF_NAME} staging/* --generate-notes --verify-tag
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - name: Sign each jar (keyless; entries land in the public Rekor log)
+        working-directory: staging
+        run: |
+          set -euo pipefail
+          for jar in *.jar; do
+            cosign sign-blob --yes "$jar" \
+              --output-signature "$jar.sig" \
+              --output-certificate "$jar.pem"
+          done
+      - name: Create release
+        run: gh release create "${GITHUB_REF_NAME}" staging/* --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
