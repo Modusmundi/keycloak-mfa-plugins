@@ -23,15 +23,14 @@
 package netzbegruenung.keycloak.authenticator;
 
 import netzbegruenung.keycloak.authenticator.credentials.SmsAuthCredentialModel;
-import netzbegruenung.keycloak.authenticator.gateway.SmsServiceFactory;
 
 import org.jboss.logging.Logger;
 import org.keycloak.authentication.CredentialRegistrator;
 import org.keycloak.authentication.RequiredActionContext;
 import org.keycloak.authentication.RequiredActionProvider;
-import org.keycloak.common.util.SecretGenerator;
 import org.keycloak.credential.CredentialProvider;
 import org.keycloak.events.Errors;
+import org.keycloak.forms.login.LoginFormsProvider;
 import org.keycloak.models.AuthenticatorConfigModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
@@ -39,9 +38,8 @@ import org.keycloak.models.UserCredentialModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.services.managers.BruteForceProtector;
 import org.keycloak.sessions.AuthenticationSessionModel;
-import org.keycloak.theme.Theme;
 
-import java.util.Locale;
+import java.util.Map;
 import jakarta.ws.rs.core.Response;
 
 public class PhoneValidationRequiredAction implements RequiredActionProvider, CredentialRegistrator {
@@ -75,24 +73,24 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 			String mobileNumber = authSession.getAuthNote("mobile_number");
 			logger.infof("Validating phone number: %s of user: %s", mobileNumber, user.getUsername());
 
-			int length = Integer.parseInt(config.getConfig().get("length"));
-			int ttl = Integer.parseInt(config.getConfig().get("ttl"));
+			Map<String, String> cfg = config.getConfig();
 
-			String code = SecretGenerator.getInstance().randomString(length, SecretGenerator.DIGITS);
-			authSession.setAuthNote("code", code);
-			authSession.setAuthNote("ttl", Long.toString(System.currentTimeMillis() + (ttl * 1000L)));
+			// Re-entry (page refresh / browser back): apply the same server-side limits as an explicit
+			// resend, silently re-displaying the form when another send is not permitted. Without this,
+			// refreshing the enrollment challenge triggers an unthrottled SMS send every time.
+			if (authSession.getAuthNote(SmsCodeSender.NOTE_LAST_SENT_AT) != null) {
+				if (SmsCodeSender.secondsUntilResendAllowed(authSession, SmsCodeSender.cooldownSeconds(cfg)) > 0
+						|| SmsCodeSender.resendsUsed(authSession) >= SmsCodeSender.maxResendCount(cfg)) {
+					context.challenge(smsForm(context, cfg).createForm(SmsAuthenticator.TPL_CODE));
+					return;
+				}
+				authSession.setAuthNote(SmsCodeSender.NOTE_RESEND_COUNT,
+					String.valueOf(SmsCodeSender.resendsUsed(authSession) + 1));
+			}
 
-			Theme theme = context.getSession().theme().getTheme(Theme.Type.LOGIN);
-			Locale locale = context.getSession().getContext().resolveLocale(user);
-			String smsAuthText = theme.getEnhancedMessages(realm,locale).getProperty("smsAuthText");
-			String smsText = String.format(smsAuthText, code, Math.floorDiv(ttl, 60));
+			SmsCodeSender.sendCode(context.getSession(), realm, user, authSession, cfg, mobileNumber);
 
-			SmsServiceFactory.get(config.getConfig(), context.getSession()).send(mobileNumber, smsText);
-
-			Response challenge = context.form()
-				.setAttribute("realm", realm)
-				.createForm(SmsAuthenticator.TPL_CODE);
-			context.challenge(challenge);
+			context.challenge(smsForm(context, cfg).createForm(SmsAuthenticator.TPL_CODE));
 		} catch (Exception e) {
 			logger.error(e.getMessage(), e);
 			context.failure();
@@ -105,6 +103,14 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 		if (isDisabledByBruteForce(context)) {
 			return;
 		}
+
+		// Resend requests are handled before any code validation: the resend button posts the form
+		// with an empty code, which must never be treated as a guess.
+		if (context.getHttpRequest().getDecodedFormParameters().containsKey(SmsCodeSender.FORM_PARAM_RESEND)) {
+			handleResend(context);
+			return;
+		}
+
 		String enteredCode = context.getHttpRequest().getDecodedFormParameters().getFirst("code");
 
 		AuthenticationSessionModel authSession = context.getAuthenticationSession();
@@ -185,10 +191,83 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 		}
 	}
 
-	private void handleInvalidSmsCode(RequiredActionContext context) {
-		Response challenge = context
-			.form()
+	/**
+	 * Handles a resend request from the enrollment code-entry form. Mirrors
+	 * SmsAuthenticator.handleResend: business-configurable ceiling and cooldown enforced
+	 * server-side; a permitted resend rotates the code and re-sends it; resend attempts
+	 * never touch the brute-force counters.
+	 */
+	private void handleResend(RequiredActionContext context) {
+		AuthenticatorConfigModel config = context.getRealm().getAuthenticatorConfigByAlias("sms-2fa");
+		if (config == null || config.getConfig() == null
+				|| config.getConfig().get("length") == null || config.getConfig().get("ttl") == null) {
+			logger.error("No usable authenticator config alias 'sms-2fa' found; cannot resend the validation SMS.");
+			context.failure();
+			return;
+		}
+		Map<String, String> cfg = config.getConfig();
+		AuthenticationSessionModel authSession = context.getAuthenticationSession();
+		String mobileNumber = authSession.getAuthNote("mobile_number");
+		if (mobileNumber == null) {
+			logger.warn("Phone number is not set; cannot resend the validation SMS.");
+			handleInvalidSmsCode(context);
+			return;
+		}
+
+		int used = SmsCodeSender.resendsUsed(authSession);
+		int max = SmsCodeSender.maxResendCount(cfg);
+		if (used >= max) {
+			// The security signal worth auditing/alerting on: someone keeps requesting codes past the ceiling.
+			logger.warnf("SMS resend limit reached during enrollment for user %s (%d/%d)",
+				context.getUser().getUsername(), used, max);
+			context.getEvent().user(context.getUser()).error("sms_resend_limit_exceeded");
+			context.challenge(smsForm(context, cfg).setError("smsAuthResendLimitReached")
+				.createForm(SmsAuthenticator.TPL_CODE));
+			return;
+		}
+
+		long wait = SmsCodeSender.secondsUntilResendAllowed(authSession, SmsCodeSender.cooldownSeconds(cfg));
+		if (wait > 0) {
+			// No send, no brute-force interaction, no event — a double-click must not spam the event log.
+			context.challenge(smsForm(context, cfg)
+				.setError("smsAuthResendTooSoon", String.valueOf(wait))
+				.createForm(SmsAuthenticator.TPL_CODE));
+			return;
+		}
+
+		try {
+			SmsCodeSender.sendCode(context.getSession(), context.getRealm(), context.getUser(),
+				authSession, cfg, mobileNumber);
+			authSession.setAuthNote(SmsCodeSender.NOTE_RESEND_COUNT, String.valueOf(used + 1));
+			context.getEvent().detail("sms_resend_count", String.valueOf(used + 1));
+			logger.infof("SMS validation code resent for user %s (resend %d of %d)",
+				context.getUser().getUsername(), used + 1, max);
+			context.challenge(smsForm(context, cfg).setInfo("smsAuthCodeResent")
+				.createForm(SmsAuthenticator.TPL_CODE));
+		} catch (Exception e) {
+			logger.error(e.getMessage(), e);
+			context.failure();
+		}
+	}
+
+	/**
+	 * Code-entry form pre-loaded with the resend state the template needs: how many resends remain
+	 * (0 hides the button) and the seconds left on the cooldown (drives the cosmetic countdown).
+	 */
+	private LoginFormsProvider smsForm(RequiredActionContext context, Map<String, String> cfg) {
+		AuthenticationSessionModel authSession = context.getAuthenticationSession();
+		return context.form()
 			.setAttribute("realm", context.getRealm())
+			.setAttribute(SmsCodeSender.ATTR_RESEND_REMAINING,
+				Math.max(0, SmsCodeSender.maxResendCount(cfg) - SmsCodeSender.resendsUsed(authSession)))
+			.setAttribute(SmsCodeSender.ATTR_RESEND_WAIT,
+				SmsCodeSender.secondsUntilResendAllowed(authSession, SmsCodeSender.cooldownSeconds(cfg)));
+	}
+
+	private void handleInvalidSmsCode(RequiredActionContext context) {
+		AuthenticatorConfigModel config = context.getRealm().getAuthenticatorConfigByAlias("sms-2fa");
+		Map<String, String> cfg = config == null ? null : config.getConfig();
+		Response challenge = smsForm(context, cfg)
 			.setError("smsAuthCodeInvalid")
 			.createForm(SmsAuthenticator.TPL_CODE);
 		context.challenge(challenge);
