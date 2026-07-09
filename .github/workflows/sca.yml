@@ -8,6 +8,11 @@ name: sca
 # HIGH once the auxiliary CLI's transitive advisories (e.g. lodash/tmp via inquirer) are triaged.
 # CodeQL is intentionally not used here; Trivy is the FOSS SCA scanner. Complements the SAST
 # (OpenGrep) workflow — that covers first-party source; this covers dependencies.
+#
+# The Trivy vuln DB (ghcr.io) can rate-limit anonymous pulls (HTTP 429). To stay robust we (1)
+# authenticate the DB pull with the workflow token to raise the limit, (2) download the DBs once in
+# a dedicated step that retries up to 5 times with exponential backoff, then (3) run every scan
+# offline (--skip-db-update) so the gate's exit code reflects findings only, never a flaky download.
 
 on:
   pull_request:
@@ -17,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  packages: read           # authenticate ghcr.io Trivy DB pulls (higher rate limit)
   security-events: write   # SARIF upload -> Security tab
 
 env:
@@ -34,16 +40,40 @@ jobs:
             | sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"
           trivy --version
 
+      - name: Authenticate to ghcr.io for Trivy DB (best effort; higher pull rate limit)
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin || true
+
+      - name: Download Trivy databases (retry 5x with exponential backoff)
+        run: |
+          set -u
+          retry() {
+            local n=1 max=5 delay=15
+            until "$@"; do
+              if [ "$n" -ge "$max" ]; then
+                echo "::error::Trivy DB download failed after ${max} attempts: $*"
+                return 1
+              fi
+              echo "::warning::DB download attempt ${n}/${max} failed (likely ghcr.io rate limit); retrying in ${delay}s"
+              sleep "${delay}"
+              n=$((n + 1)); delay=$((delay * 2))
+            done
+          }
+          retry trivy image --download-db-only --no-progress
+          retry trivy image --download-java-db-only --no-progress
+
       - name: Trivy SCA — full report (SARIF, all severities, non-blocking)
         run: |
           trivy fs --scanners vuln \
             --severity CRITICAL,HIGH,MEDIUM,LOW \
             --format sarif --output trivy.sarif \
-            --exit-code 0 .
+            --skip-db-update --skip-java-db-update \
+            --no-progress --exit-code 0 .
 
       - name: Trivy SCA — CycloneDX SBOM (component inventory)
         run: |
-          trivy fs --format cyclonedx --output sbom.cdx.json --exit-code 0 .
+          trivy fs --format cyclonedx --output sbom.cdx.json \
+            --skip-db-update --skip-java-db-update \
+            --no-progress --exit-code 0 .
 
       - name: Upload Trivy SARIF
         if: always()
@@ -68,5 +98,5 @@ jobs:
         run: |
           trivy fs --scanners vuln \
             --severity CRITICAL \
-            --exit-code 1 \
-            --no-progress .
+            --skip-db-update --skip-java-db-update \
+            --no-progress --exit-code 1 .
