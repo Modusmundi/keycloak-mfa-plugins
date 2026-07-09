@@ -15,7 +15,7 @@
 			<div class="${properties.kcFormGroupClass!} ${properties.kcFormSettingClass!}">
 				<div id="kc-form-options" class="${properties.kcFormOptionsClass!}">
 					<div class="${properties.kcFormOptionsWrapperClass!}">
-						<span><a href="/realms/${realm.name}/account">${msg("backToApplication")?no_esc}</a></span>
+						<span><a href="/realms/${realm.name}/account">${kcSanitize(msg("backToApplication"))?no_esc}</a></span>
 					</div>
 				</div>
 
@@ -23,6 +23,13 @@
 					<input name="login" class="${properties.kcButtonClass!} ${properties.kcButtonPrimaryClass!} ${properties.kcButtonBlockClass!} ${properties.kcButtonLargeClass!}" type="submit" value="${msg("doSubmit")}"/>
 				</div>
 			</div>
+			<#-- Resend: server enforces the configurable cooldown/ceiling (sms-2fa config); the
+			     attribute is absent on older providers, so the button hides on version skew. -->
+			<#if (smsResendRemaining!0) gt 0>
+				<div class="${properties.kcFormGroupClass!}">
+					<input name="resend" class="${properties.kcButtonClass!} ${properties.kcButtonDefaultClass!} ${properties.kcButtonBlockClass!} ${properties.kcButtonLargeClass!}" type="submit" value="${msg("smsAuthResend")}"/>
+				</div>
+			</#if>
 		</form>
 	<#elseif section = "info" >
 		${msg("smsAuthInstruction")}
