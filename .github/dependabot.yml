@@ -8,3 +8,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+  # Node CLI (app-authenticator-cli): keep its npm dependencies patched. The SCA workflow (Trivy)
+  # surfaces vulnerable versions; this keeps them updated so advisories like the axios SSRF chain
+  # do not reappear.
+  - package-ecosystem: "npm"
+    directory: "/app-authenticator-cli"
+    schedule:
+      interval: "weekly"

@@ -71,9 +71,9 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 			}
 
 			String mobileNumber = authSession.getAuthNote("mobile_number");
-			logger.infof("Validating phone number: %s of user: %s", mobileNumber, user.getUsername());
-
 			Map<String, String> cfg = config.getConfig();
+			boolean maskPhoneInLogs = Boolean.parseBoolean(cfg.getOrDefault("maskPhoneNumberInLogs", "true"));
+			logger.infof("Validating phone number: %s of user: %s", PhoneNumberLogMasker.forLog(mobileNumber, maskPhoneInLogs), user.getUsername());
 
 			// Re-entry (page refresh / browser back): apply the same server-side limits as an explicit
 			// resend, silently re-displaying the form when another send is not permitted. Without this,

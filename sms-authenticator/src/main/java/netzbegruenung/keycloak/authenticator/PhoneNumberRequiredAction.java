@@ -198,9 +198,11 @@ public class PhoneNumberRequiredAction implements RequiredActionProvider, Creden
 		AuthenticatorConfigModel config = context.getRealm().getAuthenticatorConfigByAlias("sms-2fa");
 		boolean normalizeNumber = false;
 		boolean forceRetryOnBadFormat = false;
+		boolean maskPhoneInLogs = true;
 		if (config != null && config.getConfig() != null) {
 			normalizeNumber = Boolean.parseBoolean(config.getConfig().getOrDefault("normalizePhoneNumber", "false"));
 			forceRetryOnBadFormat = Boolean.parseBoolean(config.getConfig().getOrDefault("forceRetryOnBadFormat", "false"));
+			maskPhoneInLogs = Boolean.parseBoolean(config.getConfig().getOrDefault("maskPhoneNumberInLogs", "true"));
 		}
 
 		// try to format the phone number
@@ -209,7 +211,7 @@ public class PhoneNumberRequiredAction implements RequiredActionProvider, Creden
 			if (formattedNumber != null && !formattedNumber.isBlank()) {
 				mobileNumber = formattedNumber;
 			} else if (forceRetryOnBadFormat) {
-				logger.errorf("Failed phone number formatting checks for: %s", mobileNumber);
+				logger.errorf("Failed phone number formatting checks for: %s", PhoneNumberLogMasker.forLog(mobileNumber, maskPhoneInLogs));
 				String formatError = context.getAuthenticationSession().getAuthNote("formatError");
 				if (formatError != null && !formatError.isBlank()) {
 					handleInvalidNumber(context, formatError);
@@ -219,7 +221,7 @@ public class PhoneNumberRequiredAction implements RequiredActionProvider, Creden
 		}
 
 		authSession.setAuthNote("mobile_number", mobileNumber);
-		logger.infof("Add required action for phone validation: [%s], user: %s", mobileNumber, context.getUser().getUsername());
+		logger.infof("Add required action for phone validation: [%s], user: %s", PhoneNumberLogMasker.forLog(mobileNumber, maskPhoneInLogs), context.getUser().getUsername());
 		context.getAuthenticationSession().addRequiredAction(PhoneValidationRequiredAction.PROVIDER_ID);
 		context.success();
 	}

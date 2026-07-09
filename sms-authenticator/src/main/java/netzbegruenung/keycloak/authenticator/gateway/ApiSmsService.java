@@ -36,6 +36,8 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
+import netzbegruenung.keycloak.authenticator.PhoneNumberLogMasker;
+
 public class ApiSmsService implements SmsService{
 
 	private static final Logger logger = Logger.getLogger(SmsServiceFactory.class);
@@ -67,6 +69,10 @@ public class ApiSmsService implements SmsService{
 
 	private final boolean stripPlusPrefix;
 
+	private final boolean maskPhoneNumberInLogs;
+
+	private final boolean forceHttpsApiUrl;
+
 	ApiSmsService(Map<String, String> config) {
 		apiurl = config.get("apiurl");
 		urlencode = Boolean.parseBoolean(config.getOrDefault("urlencode", "false"));
@@ -93,10 +99,18 @@ public class ApiSmsService implements SmsService{
 		getUrl = config.getOrDefault("getUrl", "");
 
 		stripPlusPrefix = Boolean.parseBoolean(config.getOrDefault("stripPlusPrefix", "false"));
+
+		// Secure-by-default: mask phone numbers in logs and require HTTPS gateway URLs unless an
+		// admin explicitly turns these off in the authenticator config.
+		maskPhoneNumberInLogs = Boolean.parseBoolean(config.getOrDefault("maskPhoneNumberInLogs", "true"));
+		forceHttpsApiUrl = Boolean.parseBoolean(config.getOrDefault("forceHttpsApiUrl", "true"));
 	}
 
 	public void send(String phoneNumber, String message) {
-		phoneNumber = cleanPhoneNumber(phoneNumber, countrycode);
+		// A5: refuse to transmit the OTP over a non-HTTPS gateway URL when Force-HTTPS is enabled (the
+		// default). Checked before any request is built so the code never leaves over cleartext HTTP.
+		requireSecureApiUrl();
+		phoneNumber = cleanPhoneNumber(phoneNumber, countrycode, maskPhoneNumberInLogs);
 		if (stripPlusPrefix && phoneNumber.startsWith("+")) {
 			phoneNumber = phoneNumber.substring(1);
 		}
@@ -129,7 +143,7 @@ public class ApiSmsService implements SmsService{
 			String payload = hideResponsePayload ? "redacted" : "Response: " + response.body();
 
 			if (statusCode >= 200 && statusCode < 300) {
-				logger.infof("Sent SMS to %s [%s]", phoneNumber, payload);
+				logger.infof("Sent SMS to %s [%s]", PhoneNumberLogMasker.forLog(phoneNumber, maskPhoneNumberInLogs), payload);
 			} else {
 				logErrorStatus(phoneNumber, payload, request, requestPayload, statusCode);
 			}
@@ -139,24 +153,26 @@ public class ApiSmsService implements SmsService{
 	}
 
 	private void logErrorStatus(String phoneNumber, String responsePayload, HttpRequest request, String requestPayload, int statusCode) {
+		String maskedPhone = PhoneNumberLogMasker.forLog(phoneNumber, maskPhoneNumberInLogs);
 		String logMessage = "Failed to send message to %s [%s] with request: %s [Status: %s]";
-		Object[] logParams = new Object[]{phoneNumber, responsePayload, request != null ? request.toString() : "null", statusCode};
+		Object[] logParams = new Object[]{maskedPhone, responsePayload, request != null ? request.toString() : "null", statusCode};
 
 		if (!urlencode && requestPayload != null) {
 			logMessage += ". Payload: %s";
-			logParams = new Object[]{phoneNumber, responsePayload, request != null ? request.toString() : "null", statusCode, requestPayload};
+			logParams = new Object[]{maskedPhone, responsePayload, request != null ? request.toString() : "null", statusCode, requestPayload};
 		}
 		logMessage += ". Validate your config.";
 		logger.errorf(logMessage, logParams);
 	}
 
 	private void logErrorException(String phoneNumber, HttpRequest request, String requestPayload) {
+		String maskedPhone = PhoneNumberLogMasker.forLog(phoneNumber, maskPhoneNumberInLogs);
 		String logMessage = "Failed to send message to %s with request: %s";
-		Object[] logParams = new Object[]{phoneNumber, request != null ? request.toString() : "null"};
+		Object[] logParams = new Object[]{maskedPhone, request != null ? request.toString() : "null"};
 
 		if (!urlencode && requestPayload != null) {
 			logMessage += ". Payload: %s";
-			logParams = new Object[]{phoneNumber, request != null ? request.toString() : "null", requestPayload};
+			logParams = new Object[]{maskedPhone, request != null ? request.toString() : "null", requestPayload};
 		}
 		logMessage += ". Validate your config.";
 		logger.errorf(logMessage, logParams);
@@ -231,37 +247,83 @@ public class ApiSmsService implements SmsService{
 		return "Basic " + b64_cred;
 	}
 
-	private static String cleanPhoneNumber(String phone_number, String countrycode) {
+	private static String cleanPhoneNumber(String phone_number, String countrycode, boolean maskInLogs) {
 		/*
 		 * This function tries to correct several common user errors. If there is no default country
 		 * prefix, this function does not dare to touch the phone number.
 		 * https://en.wikipedia.org/wiki/List_of_mobile_telephone_prefixes_by_country
 		 */
 		if (countrycode == null || countrycode.isEmpty()) {
-			logger.infof("Clean phone number: no country code set, return %s", phone_number);
+			logger.infof("Clean phone number: no country code set, return %s", PhoneNumberLogMasker.forLog(phone_number, maskInLogs));
 			return phone_number;
 		}
 		String country_number = plusPrefixPattern.matcher(countrycode).replaceFirst("");
 		// convert 49 to +49
 		if (phone_number.startsWith(country_number)) {
 			phone_number = phone_number.replaceFirst(country_number, countrycode);
-			logger.infof("Clean phone number: convert 49 to +49, set phone number to %s", phone_number);
+			logger.infof("Clean phone number: convert 49 to +49, set phone number to %s", PhoneNumberLogMasker.forLog(phone_number, maskInLogs));
 		}
 		// convert 0049 to +49
 		if (phone_number.startsWith("00" + country_number)) {
 			phone_number = phone_number.replaceFirst("00" + country_number, countrycode);
-			logger.infof("Clean phone number: convert 0049 to +49, set phone number to %s", phone_number);
+			logger.infof("Clean phone number: convert 0049 to +49, set phone number to %s", PhoneNumberLogMasker.forLog(phone_number, maskInLogs));
 		}
 		// convert +490176 to +49176
 		if (phone_number.startsWith(countrycode + '0')) {
 			phone_number = phone_number.replaceFirst("\\+" + country_number + '0', countrycode);
-			logger.infof("Clean phone number: convert +490176 to +49176, set phone number to %s", phone_number);
+			logger.infof("Clean phone number: convert +490176 to +49176, set phone number to %s", PhoneNumberLogMasker.forLog(phone_number, maskInLogs));
 		}
 		// convert 0 to +49
 		if (phone_number.startsWith("0")) {
 			phone_number = phone_number.replaceFirst("0", countrycode);
-			logger.infof("Clean phone number: convert 0 to +49, set phone number to %s", phone_number);
+			logger.infof("Clean phone number: convert 0 to +49, set phone number to %s", PhoneNumberLogMasker.forLog(phone_number, maskInLogs));
 		}
 		return phone_number;
+	}
+
+	/**
+	 * A5 — Force HTTPS on API URLs. When {@code forceHttpsApiUrl} is enabled (the default), the
+	 * configured gateway URL must use HTTPS so the OTP and API credentials are never sent over
+	 * cleartext HTTP. {@code http://localhost} (and loopback) is allowed for local development.
+	 * Throws {@link IllegalStateException} to abort the send when the check fails; the caller turns
+	 * this into the generic "SMS not sent" challenge (fail closed).
+	 */
+	private void requireSecureApiUrl() {
+		if (!forceHttpsApiUrl || isApiUrlSecure(apiurl)) {
+			return;
+		}
+		// Do not log the full URL (it can carry credentials/query tokens).
+		logger.error("Refusing to send SMS: the gateway URL is not HTTPS and 'Force HTTPS on API URLs' is enabled. "
+			+ "Use an https:// URL or intentionally disable the toggle.");
+		throw new IllegalStateException("SMS gateway URL must use HTTPS");
+	}
+
+	/**
+	 * True when the URL may safely carry an OTP: HTTPS, or plain HTTP only to a loopback host
+	 * (localhost / 127.0.0.1 / ::1) for local development. Null, blank, or unparseable URLs are
+	 * treated as not secure.
+	 */
+	static boolean isApiUrlSecure(String apiurl) {
+		if (apiurl == null || apiurl.isBlank()) {
+			return false;
+		}
+		URI uri;
+		try {
+			uri = URI.create(apiurl.trim());
+		} catch (IllegalArgumentException e) {
+			return false;
+		}
+		String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
+		if (scheme.equals("https")) {
+			return true;
+		}
+		return scheme.equals("http") && isLoopbackHost(uri.getHost());
+	}
+
+	private static boolean isLoopbackHost(String host) {
+		if (host == null) {
+			return false;
+		}
+		return host.equalsIgnoreCase("localhost") || host.equals("127.0.0.1") || host.equals("::1") || host.equals("[::1]");
 	}
 }
