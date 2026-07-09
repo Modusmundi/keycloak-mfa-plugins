@@ -9,10 +9,15 @@ name: sca
 # CodeQL is intentionally not used here; Trivy is the FOSS SCA scanner. Complements the SAST
 # (OpenGrep) workflow — that covers first-party source; this covers dependencies.
 #
-# The Trivy vuln DB (ghcr.io) can rate-limit anonymous pulls (HTTP 429). To stay robust we (1)
-# authenticate the DB pull with the workflow token to raise the limit, (2) download the DBs once in
-# a dedicated step that retries up to 5 times with exponential backoff, then (3) run every scan
-# offline (--skip-db-update) so the gate's exit code reflects findings only, never a flaky download.
+# Network-robustness (two independent rate limits are in play):
+#   1. Trivy's own vuln DB (registry) — pulled ONCE in a dedicated step with retry+backoff, then
+#      every scan runs with --skip-db-update so it is fetched exactly once.
+#   2. Maven Central — Trivy resolves parent/BOM POMs remotely by default, and Sonatype 429s the
+#      shared runner IP with a 30-min block (Retry-After: 1800), which no short backoff can ride
+#      out. So scans use --offline-scan: no remote POM calls, no Maven Central dependency. The npm
+#      lockfile is fully resolved offline (this is where the real debt is); Maven coverage is
+#      best-effort from the poms (+ any cached ~/.m2). To restore full Maven transitive coverage,
+#      cache ~/.m2 from the build job and drop --offline-scan.
 
 on:
   pull_request:
@@ -22,7 +27,6 @@ on:
 
 permissions:
   contents: read
-  packages: read           # authenticate ghcr.io Trivy DB pulls (higher rate limit)
   security-events: write   # SARIF upload -> Security tab
 
 env:
@@ -40,10 +44,7 @@ jobs:
             | sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"
           trivy --version
 
-      - name: Authenticate to ghcr.io for Trivy DB (best effort; higher pull rate limit)
-        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin || true
-
-      - name: Download Trivy databases (retry 5x with exponential backoff)
+      - name: Download Trivy databases once (retry 5x with exponential backoff)
         run: |
           set -u
           retry() {
@@ -53,7 +54,7 @@ jobs:
                 echo "::error::Trivy DB download failed after ${max} attempts: $*"
                 return 1
               fi
-              echo "::warning::DB download attempt ${n}/${max} failed (likely ghcr.io rate limit); retrying in ${delay}s"
+              echo "::warning::DB download attempt ${n}/${max} failed (registry rate limit?); retrying in ${delay}s"
               sleep "${delay}"
               n=$((n + 1)); delay=$((delay * 2))
             done
@@ -63,7 +64,7 @@ jobs:
 
       - name: Trivy SCA — full report (SARIF, all severities, non-blocking)
         run: |
-          trivy fs --scanners vuln \
+          trivy fs --scanners vuln --offline-scan \
             --severity CRITICAL,HIGH,MEDIUM,LOW \
             --format sarif --output trivy.sarif \
             --skip-db-update --skip-java-db-update \
@@ -71,7 +72,7 @@ jobs:
 
       - name: Trivy SCA — CycloneDX SBOM (component inventory)
         run: |
-          trivy fs --format cyclonedx --output sbom.cdx.json \
+          trivy fs --offline-scan --format cyclonedx --output sbom.cdx.json \
             --skip-db-update --skip-java-db-update \
             --no-progress --exit-code 0 .
 
@@ -96,7 +97,7 @@ jobs:
 
       - name: Trivy SCA — GATE on CRITICAL
         run: |
-          trivy fs --scanners vuln \
+          trivy fs --scanners vuln --offline-scan \
             --severity CRITICAL \
             --skip-db-update --skip-java-db-update \
             --no-progress --exit-code 1 .
