@@ -12,9 +12,11 @@ package netzbegruenung.keycloak.authenticator.gateway;
 
 import org.junit.jupiter.api.Test;
 
+import java.net.http.HttpRequest;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -78,6 +80,37 @@ public class ApiSmsServiceSecurityTest {
 		config.put("apiurl", "http://127.0.0.1:1/send");
 		SmsService svc = SmsServiceFactory.get(config);
 		svc.send("+15555550100", "code 123456"); // must not throw IllegalStateException
+	}
+
+	// F2 — every outbound request must carry a timeout so a hung gateway cannot pin the auth thread.
+
+	@Test
+	public void jsonRequestCarriesTimeout() {
+		HttpRequest req = new ApiSmsService(timeoutConfig()).jsonRequest("{}").build();
+		assertTrue(req.timeout().isPresent(), "JSON POST request must set a timeout");
+		assertEquals(ApiSmsService.REQUEST_TIMEOUT, req.timeout().get());
+	}
+
+	@Test
+	public void urlencodedRequestCarriesTimeout() {
+		HttpRequest req = new ApiSmsService(timeoutConfig()).urlencodedRequest("+15555550100", "code 123456").build();
+		assertTrue(req.timeout().isPresent(), "urlencoded POST request must set a timeout");
+		assertEquals(ApiSmsService.REQUEST_TIMEOUT, req.timeout().get());
+	}
+
+	@Test
+	public void getRequestCarriesTimeout() {
+		Map<String, String> config = timeoutConfig();
+		config.put("getUrl", "/send?to={phone}&msg={message}");
+		HttpRequest req = new ApiSmsService(config).getRequest("+15555550100", "code 123456").build();
+		assertTrue(req.timeout().isPresent(), "GET request must set a timeout");
+		assertEquals(ApiSmsService.REQUEST_TIMEOUT, req.timeout().get());
+	}
+
+	private static Map<String, String> timeoutConfig() {
+		Map<String, String> config = baseConfig();
+		config.put("apiurl", "https://api.example.com/send");
+		return config;
 	}
 
 	private static Map<String, String> baseConfig() {

@@ -144,3 +144,77 @@ The fixed jar loaded with no startup errors and completed a full enrollment (cho
 ---
 
 *Prepared for handover. Implemented changes live on branch `security/sms-pci-hardening`; see the commit for the diff and tests.*
+
+---
+
+## 9. Follow-up hardening pass (2026-07-10) — enrolment path & gateway client
+
+A second, narrower pass focused on the parts of the **deployed** `sms-authenticator` module the first
+audit covered only lightly: phone-number **enrolment/validation** and the **gateway HTTP client**.
+(Email OTP and the app-push authenticator were explicitly ruled **out of scope** by the owner — email is
+the distinct password-reset factor so email-OTP-as-2FA is not used, and app-push is not deployed.) Three
+concrete fixes, each with unit tests plus runtime before/after evidence in a Keycloak `26.6.3` container
+(realm `sectest`, `sms-2fa` config, `simulation` on; disposable container torn down afterward). Suite is
+now **39/39 green** (12 added).
+
+| ID | Change | Severity | Status |
+|----|--------|----------|--------|
+| **F1** | `allowedRegions` / `numberTypeFilters` allowlist enforced **fail-closed** at enrolment, independent of the `normalizePhoneNumber` / `forceRetryOnBadFormat` formatting toggles | **HIGH** (SMS toll-fraud / pumping) | **Implemented + verified** |
+| **F2** | Connect + request **timeouts** on the SMS gateway `HttpClient`/`HttpRequest` | Medium (auth-thread DoS) | **Implemented + verified** |
+| **F3** | Null-guard a missing `mobile_number` form field (was an unhandled NPE/500) | Low (robustness) | **Implemented + verified** |
+
+### F1 — Region/type allowlist was silently bypassed (PCI 8.x anti-abuse; toll-fraud)
+
+**Finding.** The region allowlist (`allowedRegions`), `isValidNumber`, and number-type filters lived inside
+`PhoneNumberRequiredAction.formatPhoneNumber`, which ran only when `normalizePhoneNumber=true` **and** only
+rejected when `forceRetryOnBadFormat=true` — both default **false**. In every other configuration a number
+whose region was not in the allowlist was stored and texted anyway (the `formatPhoneNumber==null` "reject"
+signal fell through). Enrolment is where the user chooses the destination number, so a configured allowlist
+gave **zero** protection in the default config — an SMS-pumping / toll-fraud primitive. Independently
+reported in `app-authenticator/SMS-REGION-ALLOWLIST-BYPASS.md` (now marked resolved).
+
+**Correction (implemented).** Refactored the region/type/validity logic into a shared
+`parseAndValidatePhoneNumber` + boolean `validateRegionAndType`, and added a standalone **fail-closed gate**
+in `processAction`: when `allowedRegions` or `numberTypeFilters` is configured, a number that is
+out-of-region, wrong-type, invalid, or unparseable is rejected (re-prompt) **regardless** of the two
+formatting toggles. The formatting path is otherwise unchanged, so existing best-effort-normalisation
+configs behave as before. Config help text corrected to drop the "only applied when Format phone number is
+enabled" caveat.
+
+**Runtime evidence (container, default config `normalizePhoneNumber=false`/`forceRetryOnBadFormat=false`,
+`allowedRegions=US`):**
+```
+BEFORE (pre-fix jar): enrol +447400123456 → ACCEPTED; log: "***** SIMULATION MODE ***** Would send SMS to +447400123456 ..."
+AFTER  (fixed jar):   enrol +447400123456 → REJECTED; log: "region GB is not in the allowed regions [US]" + "Rejected phone-number enrolment ..." (NO send)
+AFTER  (fixed jar):   enrol +12015550123  → ACCEPTED; log: "Would send SMS to +12015550123 ..." (in-region still works)
+```
+Unit test `PhoneNumberRegionEnforcementTest` drives the full flag matrix (out-of-region rejected in all
+three combinations, in-region accepted, unparseable rejected, number-type filter enforced, no-allowlist
+backward-compat).
+
+### F2 — No timeout on the SMS gateway HTTP client (auth-thread DoS)
+
+**Finding.** `ApiSmsService` created `HttpClient.newHttpClient()` and built requests with no connect/request
+timeout, then blocked on `client.send(...)` on the Keycloak auth thread. A hung/slow/black-holed gateway
+could pin that worker indefinitely (thread-pool exhaustion → Keycloak-wide DoS).
+
+**Correction (implemented).** `connectTimeout(5s)` on the client and `timeout(10s)` on every request; a
+timeout surfaces through the existing `catch` → generic "SMS not sent" (fail closed). **Runtime:** with the
+gateway pointed at a non-routable address (`192.0.2.1`, RFC 5737) and `simulation=false`, the send now fails
+in **~5s** (`Failed to send message ... Validate your config.`) instead of hanging. Unit tests assert each
+built request carries the timeout.
+
+### F3 — NPE on a missing `mobile_number` field
+
+**Finding.** `processAction` dereferenced `getFirst("mobile_number")` in a regex matcher; a malformed POST
+omitting the field threw NPE → 500. **Correction:** null/blank-guard and re-prompt (mirrors the login-path
+empty-OTP guard). Unit-tested.
+
+### Documented, not implemented (owner decision)
+- **Cross-session SMS send cap** — the resend cooldown/ceiling is per-auth-session, so fresh sessions can
+  re-trigger sends. Deferred: the owner mitigates this at the perimeter with **reCAPTCHA on the flow + rate
+  limiting at the API gateway**. Left as a possible later provider-side follow-up.
+- **`getJsonBody` unescaped JSON concatenation** (`ApiSmsService`) — not reachable in the deployed
+  `urlencode` profile (numbers are sanitised to `[0-9+]`); recommend a JSON writer if the JSON-POST profile
+  is ever adopted.
+- **`release.yml`** — add a `cosign-release` version pin and gate the release on the SAST/SCA suite.
