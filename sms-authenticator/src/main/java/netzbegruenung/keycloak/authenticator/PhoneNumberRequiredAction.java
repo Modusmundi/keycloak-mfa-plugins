@@ -185,8 +185,17 @@ public class PhoneNumberRequiredAction implements RequiredActionProvider, Creden
 
 	@Override
 	public void processAction(RequiredActionContext context) {
-		String mobileNumber = nonDigitPattern.matcher(context.getHttpRequest().getDecodedFormParameters().getFirst("mobile_number")).replaceAll("");
 		AuthenticationSessionModel authSession = context.getAuthenticationSession();
+
+		// Guard a missing/blank 'mobile_number' form field (e.g. a malformed POST) instead of
+		// dereferencing null in the regex matcher below, which would surface as an unhandled 500.
+		// Re-prompt the enrolment form, the same as any invalid number.
+		String rawMobileNumber = context.getHttpRequest().getDecodedFormParameters().getFirst("mobile_number");
+		if (rawMobileNumber == null || rawMobileNumber.isBlank()) {
+			handleInvalidNumber(context, "numberFormatNumberInvalid");
+			return;
+		}
+		String mobileNumber = nonDigitPattern.matcher(rawMobileNumber).replaceAll("");
 
 		// get the country code from the select input if available and add it to the mobile number
 		if (context.getHttpRequest().getDecodedFormParameters().getFirst("country_code") != null) {
@@ -199,10 +208,27 @@ public class PhoneNumberRequiredAction implements RequiredActionProvider, Creden
 		boolean normalizeNumber = false;
 		boolean forceRetryOnBadFormat = false;
 		boolean maskPhoneInLogs = true;
+		boolean allowlistConfigured = false;
 		if (config != null && config.getConfig() != null) {
 			normalizeNumber = Boolean.parseBoolean(config.getConfig().getOrDefault("normalizePhoneNumber", "false"));
 			forceRetryOnBadFormat = Boolean.parseBoolean(config.getConfig().getOrDefault("forceRetryOnBadFormat", "false"));
 			maskPhoneInLogs = Boolean.parseBoolean(config.getConfig().getOrDefault("maskPhoneNumberInLogs", "true"));
+			allowlistConfigured = !config.getConfig().getOrDefault("allowedRegions", "").isBlank()
+				|| !config.getConfig().getOrDefault("numberTypeFilters", "").isBlank();
+		}
+
+		// SECURITY (anti-toll-fraud): when an allowed-region or number-type allowlist is configured,
+		// enforce it fail-closed here — independent of the normalizePhoneNumber / forceRetryOnBadFormat
+		// formatting toggles. Previously the region/type checks only took effect inside the
+		// normalization path AND only rejected when forceRetryOnBadFormat was on, so a configured
+		// allowlist silently no-opped in the default configuration and a disallowed (e.g.
+		// premium-rate / out-of-region) number could be enrolled and texted.
+		if (allowlistConfigured && !validateRegionAndType(context, mobileNumber)) {
+			String formatError = authSession.getAuthNote("formatError");
+			logger.warnf("Rejected phone-number enrolment: number fails the configured region/type allowlist for user %s",
+				context.getUser().getUsername());
+			handleInvalidNumber(context, formatError != null && !formatError.isBlank() ? formatError : "numberFormatRegionNotAllowed");
+			return;
 		}
 
 		// try to format the phone number
@@ -239,11 +265,50 @@ public class PhoneNumberRequiredAction implements RequiredActionProvider, Creden
 			logger.error("Failed format phone number, no config alias sms-2fa found");
 			return mobileNumber;
 		}
+		PhoneNumber parsed = parseAndValidatePhoneNumber(context, config.getConfig(), mobileNumber);
+		if (parsed == null) {
+			return null;
+		}
+		// return the E164 format of the mobile number
+		return PhoneNumberUtil.getInstance().format(parsed, PhoneNumberUtil.PhoneNumberFormat.E164);
+	}
+
+	/**
+	 * True when {@code mobileNumber} satisfies every configured phone-number policy check (valid
+	 * number, allowed region, allowed number type). This is a SECURITY gate — the region/type
+	 * allowlist is anti-toll-fraud — so it fails <em>closed</em>: an unparseable, invalid, or
+	 * out-of-policy number returns {@code false} and records the specific {@code formatError}
+	 * auth-note. When the {@code sms-2fa} config is absent the number cannot be validated, which
+	 * also fails closed.
+	 *
+	 * <p>Unlike {@link #formatPhoneNumber}, this does not rewrite the number and is independent of
+	 * the {@code normalizePhoneNumber} / {@code forceRetryOnBadFormat} formatting toggles, so a
+	 * configured allowlist is enforced regardless of those preferences.
+	 */
+	private boolean validateRegionAndType(RequiredActionContext context, String mobileNumber) {
+		AuthenticatorConfigModel config = context.getRealm().getAuthenticatorConfigByAlias("sms-2fa");
+		if (config == null || config.getConfig() == null) {
+			logger.error("Cannot validate phone number region/type: no config alias sms-2fa found");
+			context.getAuthenticationSession().setAuthNote("formatError", "numberFormatNumberInvalid");
+			return false;
+		}
+		return parseAndValidatePhoneNumber(context, config.getConfig(), mobileNumber) != null;
+	}
+
+	/**
+	 * Parses {@code mobileNumber} against the config's default country region and applies the
+	 * validity, allowed-region, and number-type-filter checks. Returns the parsed {@link PhoneNumber}
+	 * when it passes every configured check, or {@code null} (after setting the {@code formatError}
+	 * auth-note) on any failure — unparseable input, an invalid number, a disallowed region, or a
+	 * disallowed number type. Shared by {@link #formatPhoneNumber} and {@link #validateRegionAndType}
+	 * so the allowlist logic lives in exactly one place.
+	 */
+	private PhoneNumber parseAndValidatePhoneNumber(RequiredActionContext context, Map<String, String> cfg, String mobileNumber) {
 		final PhoneNumberUtil phoneNumberUtil = PhoneNumberUtil.getInstance();
 		int countryNumber;
 		// try to get the country code from the country number in the config, fallback on default DE
 		try {
-			countryNumber = Integer.parseInt(whitespacePattern.matcher(config.getConfig()
+			countryNumber = Integer.parseInt(whitespacePattern.matcher(cfg
 				.getOrDefault("countrycode", "49").replace("+", ""))
 				.replaceAll(""));
 		} catch (NumberFormatException e) {
@@ -269,7 +334,7 @@ public class PhoneNumberRequiredAction implements RequiredActionProvider, Creden
 		}
 
 		// apply allowed-region filter: reject numbers whose region is not in the configured allowlist
-		String allowedRegionsString = config.getConfig().getOrDefault("allowedRegions", "");
+		String allowedRegionsString = cfg.getOrDefault("allowedRegions", "");
 		if (allowedRegionsString != null && !allowedRegionsString.isBlank()) {
 			String region = phoneNumberUtil.getRegionCodeForNumber(originalPhoneNumberParsed);
 			boolean regionAllowed = false;
@@ -291,7 +356,7 @@ public class PhoneNumberRequiredAction implements RequiredActionProvider, Creden
 		List<PhoneNumberUtil.PhoneNumberType> numberTypeFilters = new ArrayList<>();
 		String numberFiltersString = null;
 		try {
-			numberFiltersString = config.getConfig().getOrDefault("numberTypeFilters", "");
+			numberFiltersString = cfg.getOrDefault("numberTypeFilters", "");
 			if (!numberFiltersString.isBlank()) {
 				numberFilterSplitter.splitToStream(numberFiltersString).forEach(filterString ->
 					numberTypeFilters.add(PhoneNumberUtil.PhoneNumberType.valueOf(filterString)));
@@ -313,8 +378,7 @@ public class PhoneNumberRequiredAction implements RequiredActionProvider, Creden
 			}
 		}
 
-		// return the E164 format of the mobile number
-		return phoneNumberUtil.format(originalPhoneNumberParsed, PhoneNumberUtil.PhoneNumberFormat.E164);
+		return originalPhoneNumberParsed;
 	}
 
 	private void handleInvalidNumber(RequiredActionContext context, String formatError) {
