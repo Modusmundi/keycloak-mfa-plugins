@@ -32,6 +32,7 @@ import java.util.Base64;
 import java.net.URLEncoder;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -42,6 +43,12 @@ public class ApiSmsService implements SmsService{
 
 	private static final Logger logger = Logger.getLogger(SmsServiceFactory.class);
 	private static final Pattern plusPrefixPattern = Pattern.compile("\\+");
+
+	// Bound the outbound gateway call: the send runs synchronously on the Keycloak auth thread, so a
+	// hung/slow/black-holed gateway would otherwise pin that thread indefinitely. A timeout surfaces
+	// as an exception, which send()'s catch turns into the generic "SMS not sent" challenge (fail closed).
+	static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
+	static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
 	private final String apiurl;
 	private final Boolean urlencode;
@@ -117,7 +124,7 @@ public class ApiSmsService implements SmsService{
 		Builder requestBuilder;
 		HttpRequest request = null;
 		String requestPayload = null;
-		var client = HttpClient.newHttpClient();
+		var client = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build();
 		try {
 			if (getUrl != null && !getUrl.isBlank()) {
 				requestBuilder = getRequest(phoneNumber, message);
@@ -212,6 +219,7 @@ public class ApiSmsService implements SmsService{
 	public Builder jsonRequest(String sendJson) {
 		return HttpRequest.newBuilder()
 			.uri(URI.create(apiurl))
+			.timeout(REQUEST_TIMEOUT)
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(sendJson));
 	}
@@ -227,6 +235,7 @@ public class ApiSmsService implements SmsService{
 
 		return HttpRequest.newBuilder()
 				.uri(URI.create(apiurl))
+				.timeout(REQUEST_TIMEOUT)
 				.header("Content-Type", "application/x-www-form-urlencoded")
 				.POST(HttpRequest.BodyPublishers.ofString(body));
 	}
@@ -238,6 +247,7 @@ public class ApiSmsService implements SmsService{
 		getNewUrl = getNewUrl.replace("{senderId}", URLEncoder.encode(senderId != null ? senderId : "", StandardCharsets.UTF_8));
 		return HttpRequest.newBuilder()
 				.uri(URI.create(apiurl.concat(getNewUrl)))
+				.timeout(REQUEST_TIMEOUT)
 				.GET();
 	}
 
