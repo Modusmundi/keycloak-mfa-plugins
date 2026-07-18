@@ -2,7 +2,10 @@
 
 ## Supported versions
 
-Only the latest release receives security fixes.
+Only the latest release receives security fixes, and only for the modules it ships:
+`sms-authenticator` and `enforce-mfa`. The `email-authenticator`, `app-authenticator` and
+`app-authenticator-cli` directories are unmaintained reference code, excluded from the build and
+from releases, and receive no fixes.
 
 ## Reporting a vulnerability
 

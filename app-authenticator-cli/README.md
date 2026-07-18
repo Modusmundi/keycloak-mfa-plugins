@@ -1,5 +1,9 @@
 # App Authenticator CLI
 
+> **Status: not maintained.** Like its server-side counterpart, the [App
+> Authenticator](../app-authenticator/README.md), this reference client is kept in the tree for
+> reference only.
+
 A Node.js reference implementation of the client-side logic of the [App Authenticator](../app-authenticator/README.md), useful for exercising the API without a mobile app.
 
 ## Usage

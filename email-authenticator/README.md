@@ -1,5 +1,9 @@
 # Keycloak Email Authenticator
 
+> **Status: not built, released, or maintained.** This module is excluded from the Maven build and
+> from releases; it is kept in the tree for reference only. The last release containing its jar is
+> `v26.6.5-fwc.7`.
+
 Keycloak Authentication Provider implementation that sends a one-time code (OTP) via email using the SMTP server configured in the Keycloak realm.
 
 ## Installing

@@ -1,16 +1,16 @@
 # Keycloak MFA Plugin collection
 
-This repository contains the source code for a collection of Keycloak MFA plugins:
+This repository contains the source code for a collection of Keycloak MFA plugins. Two plugins are built and released:
 
 * [SMS authenticator](sms-authenticator/README.md): Provides SMS as authentication step. Messages are sent via a configurable HTTP API. (production ready)
-* [Email authenticator](email-authenticator/README.md): Provides Email OTP as authentication step. Uses the SMTP server configured in the realm. (production ready)
 * [Enforce MFA](enforce-mfa/README.md): Force users to configure a second factor after logging in. (beta)
-* [Native App MFA integration](app-authenticator/README.md): Connect a mobile app to Keycloak which receives a notification about a pending login and lets the user approve or reject it. (work in progress)
 
-Two further directories support the plugins:
+Two further plugins are kept in the tree for reference but are **not built, released, or maintained** — they are excluded from the Maven build and from releases:
 
-* [mfa-dev-runner](mfa-dev-runner/README.md): Runs a local Keycloak in Quarkus dev mode with all plugins deployed.
-* [app-authenticator-cli](app-authenticator-cli/README.md): A Node.js reference client for the app authenticator API. Not part of the Maven build.
+* [Email authenticator](email-authenticator/README.md): Provides Email OTP as authentication step. Uses the SMTP server configured in the realm.
+* [Native App MFA integration](app-authenticator/README.md): Connect a mobile app to Keycloak which receives a notification about a pending login and lets the user approve or reject it. Its Node.js reference client lives in [app-authenticator-cli](app-authenticator-cli/README.md).
+
+The [mfa-dev-runner](mfa-dev-runner/README.md) directory runs a local Keycloak in Quarkus dev mode with the built plugins deployed.
 
 Each plugin is documented in its own README. If you need support for deployment or adjustments, please contact [support@verdigado.com](mailto:support@verdigado.com).
 
@@ -28,15 +28,15 @@ You need JDK 17 and Apache Maven (the repository does not ship a Maven wrapper).
 mvn clean install
 ```
 
-Each module writes its jar to its own `target` directory, named `netzbegruenung.<module>-v<version>.jar`, for example `sms-authenticator/target/netzbegruenung.sms-authenticator-v26.6.5.jar`.
+Each built module writes its jar to its own `target` directory, named `netzbegruenung.<module>-v<version>.jar`, for example `sms-authenticator/target/netzbegruenung.sms-authenticator-v26.6.5.jar`. The unmaintained modules are not part of the reactor; to build one anyway, run Maven inside its directory.
 
 ## Development
 
-The [MFA dev runner](mfa-dev-runner/README.md) starts a Keycloak dev server with all plugins deployed and supports hot reload.
+The [MFA dev runner](mfa-dev-runner/README.md) starts a Keycloak dev server with the built plugins deployed and supports hot reload.
 
 ## Releases
 
-Releases are built by the GitHub Actions workflow [`release.yml`](.github/workflows/release.yml), triggered by pushing a tag that starts with `v`. A release contains the jar of each plugin module along with a `.sha512` checksum and a cosign signature (`.sig` and `.pem`) per jar.
+Releases are built by the GitHub Actions workflow [`release.yml`](.github/workflows/release.yml), triggered by pushing a tag that starts with `v`. A release contains the `sms-authenticator` and `enforce-mfa` jars along with a `.sha512` checksum and a cosign signature (`.sig` and `.pem`) per jar. Releases up to `v26.6.5-fwc.7` also contained the email and app authenticator jars.
 
 To cut a release you need the access rights to push protected tags, see the [GitHub documentation on tag protection rules](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-tag-protection-rules#about-tag-protection-rules).
 
@@ -51,4 +51,4 @@ To cut a release you need the access rights to push protected tags, see the [Git
    ```
 4. Trigger the release with `git push --tags`
 
-After the workflow completes, the new release is available on the repository's releases page with the signed jar files for each module.
+After the workflow completes, the new release is available on the repository's releases page with the signed jar files.

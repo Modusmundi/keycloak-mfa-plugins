@@ -6,6 +6,8 @@ the `v26.6.5-fwc.*` tags are releases of this fork.
 
 ## Unreleased
 
+- build: drop the undeployed `email-authenticator` and `app-authenticator` modules from the Maven
+  build, the dev runner and releases; their source stays in the tree as unmaintained reference code
 - docs: overhaul of all module READMEs, security docs relocated and condensed, SECURITY.md and this
   changelog added
 
