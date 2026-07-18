@@ -144,6 +144,10 @@ public class EnforceMfaAuthenticator implements Authenticator {
 			.stream()
 			.map(f -> context.getRealm().getRequiredActionProviderByAlias(f.getId()))
 			.filter(Objects::nonNull)
+			// SECURITY: only offer/accept ENABLED required actions. A disabled required action is silently
+			// dropped by Keycloak when processed, so offering it would let action() complete the step with
+			// no MFA enrolled. authenticate() and action() both flow through here, so this closes both.
+			.filter(RequiredActionProviderModel::isEnabled)
 			.collect(Collectors.toList());
 	}
 

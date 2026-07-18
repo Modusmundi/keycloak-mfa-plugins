@@ -10,6 +10,7 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:   # so the Release workflow can run this as a gate before publishing
 
 permissions:
   contents: read
@@ -21,15 +22,26 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install OpenGrep (pinned, cosign-signed binary)
+      - name: Install OpenGrep (pinned binary, sha256-verified)
+        env:
+          OPENGREP_VERSION: v1.23.0
+          # sha256 of opengrep_manylinux_x86 for the pinned version. Update both together on a bump.
+          OPENGREP_SHA256: 1f06548af379ab6080698a609612890ffad2d92dc2172f1e97d38d48096d5ef8
         run: |
-          curl -fsSL https://github.com/opengrep/opengrep/releases/download/v1.23.0/opengrep_manylinux_x86 -o /usr/local/bin/opengrep
+          set -euo pipefail
+          curl -fsSL "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86" -o /usr/local/bin/opengrep
+          echo "${OPENGREP_SHA256}  /usr/local/bin/opengrep" | sha256sum -c -
           chmod +x /usr/local/bin/opengrep
           opengrep --version
 
-      - name: Fetch OpenGrep OSS rules (drop the spring pack)
+      - name: Fetch OpenGrep OSS rules (pinned commit; drop the spring pack)
+        env:
+          # Pin the rules to an exact commit so a scan is reproducible and cannot be altered upstream.
+          OPENGREP_RULES_SHA: f1d2b562b414783763fd02a6ed2736eaed622efa
         run: |
-          git clone --depth 1 https://github.com/opengrep/opengrep-rules.git /tmp/ogr
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/opengrep/opengrep-rules.git /tmp/ogr
+          git -C /tmp/ogr checkout "${OPENGREP_RULES_SHA}"
           rm -rf /tmp/ogr/java/spring   # false-matches non-Spring Keycloak SPIs
 
       - name: OpenGrep — GATE on findings (SARIF report)

@@ -9,11 +9,23 @@ on:
     tags:
       - v**
 
+# Least-privilege default for the whole workflow. The called SAST/SCA workflows also upload SARIF to
+# the Security tab, which needs security-events: write; the release job overrides with what it needs.
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
+  # A release is gated on: the build (which runs the unit tests), SAST (OpenGrep), and SCA (Trivy,
+  # CRITICAL gate). Any of them failing blocks publication of the tag.
   build:
     uses: ./.github/workflows/build.yml
+  sast:
+    uses: ./.github/workflows/sast.yaml
+  sca:
+    uses: ./.github/workflows/sca.yml
   release:
-    needs: build
+    needs: [build, sast, sca]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -22,20 +34,33 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
-      - name: Download built jars
+      - name: Download built artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: packages
           path: staging
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
-      - name: Sign each jar (keyless; entries land in the public Rekor log)
+      - name: Verify exactly the two provider jars are present (no stray artifacts)
         working-directory: staging
         run: |
           set -euo pipefail
-          for jar in *.jar; do
-            cosign sign-blob --yes "$jar" \
-              --output-signature "$jar.sig" \
-              --output-certificate "$jar.pem"
+          jar_count=$(ls -1 *.jar | wc -l)
+          if [ "$jar_count" -ne 2 ]; then
+            echo "::error::expected exactly 2 provider jars to sign/release, found $jar_count"
+            ls -1; exit 1
+          fi
+          if ls original-*.jar >/dev/null 2>&1; then
+            echo "::error::a Maven Shade original-*.jar reached the release staging area"; exit 1
+          fi
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - name: Sign each artifact (keyless; entries land in the public Rekor log)
+        working-directory: staging
+        run: |
+          set -euo pipefail
+          for blob in *.jar sbom.cdx.json; do
+            [ -e "$blob" ] || continue
+            cosign sign-blob --yes "$blob" \
+              --output-signature "$blob.sig" \
+              --output-certificate "$blob.pem"
           done
       - name: Create release
         run: gh release create "${GITHUB_REF_NAME}" staging/* --generate-notes --verify-tag
