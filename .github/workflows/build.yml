@@ -2,6 +2,9 @@ name: Reusable build workflow
 
 on: workflow_call
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,14 +17,32 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
           cache: maven
-      - name: Build with Maven
-        run: mvn -B install --file pom.xml
-      - run: |
+      - name: Build with Maven (version pinned via the wrapper)
+        run: ./mvnw -B install --file pom.xml
+      - name: Generate aggregate CycloneDX SBOM (resolved Maven dependency graph)
+        run: ./mvnw -B -DskipTests org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom
+      - name: Stage exactly the two provider jars (+ SBOM)
+        run: |
+          set -euo pipefail
           mkdir staging
-          cp sms-authenticator/target/*.jar staging
-          cp email-authenticator/target/*.jar staging
-          cp app-authenticator/target/*.jar staging
-          cp enforce-mfa/target/*.jar staging
+          shopt -s extglob nullglob
+          # Copy ONLY the shaded provider jar from each module — never Maven Shade's pre-shade
+          # `original-*.jar` backup, which is an incomplete artifact that must not be signed or released.
+          for module in sms-authenticator enforce-mfa; do
+            jars=( "$module"/target/!(original-*).jar )
+            if [ "${#jars[@]}" -ne 1 ]; then
+              echo "::error::expected exactly one provider jar in $module/target, found: ${jars[*]:-none}"
+              exit 1
+            fi
+            cp "${jars[0]}" staging/
+          done
+          cp target/bom.json staging/sbom.cdx.json
+          jar_count=$(ls -1 staging/*.jar | wc -l)
+          if [ "$jar_count" -ne 2 ]; then
+            echo "::error::expected exactly 2 staged provider jars, found $jar_count"
+            exit 1
+          fi
+          echo "Staged artifacts:"; ls -1 staging
       - name: Create hash files
         run: |
           for jar in *.jar

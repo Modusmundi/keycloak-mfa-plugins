@@ -73,13 +73,14 @@ public class ApiSmsServiceSecurityTest {
 
 	@Test
 	public void sendOverPlainHttpIsPermittedWhenForceOff() {
-		// Explicitly disabled: the scheme check must not reject; a loopback port that refuses the
-		// connection keeps this hermetic (the send error is swallowed internally, no exception out).
+		// Explicitly disabled: the scheme check must not reject. A loopback port that refuses the
+		// connection keeps this hermetic — the send now fails closed with SmsDeliveryException (a
+		// delivery failure), NOT IllegalStateException, proving the scheme check passed.
 		Map<String, String> config = baseConfig();
 		config.put("forceHttpsApiUrl", "false");
 		config.put("apiurl", "http://127.0.0.1:1/send");
 		SmsService svc = SmsServiceFactory.get(config);
-		svc.send("+15555550100", "code 123456"); // must not throw IllegalStateException
+		assertThrows(SmsDeliveryException.class, () -> svc.send("+15555550100", "code 123456"));
 	}
 
 	// F2 — every outbound request must carry a timeout so a hung gateway cannot pin the auth thread.

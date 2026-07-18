@@ -202,6 +202,28 @@ public class PhoneNumberRegionEnforcementTest {
 		assertRejected();
 	}
 
+	// --- A malformed numberTypeFilters must fail CLOSED (previously it cleared the list and allowed all) ---
+
+	@Test
+	public void invalidNumberTypeFilterRejectedFailClosed() {
+		// "LANDLINE" is not a libphonenumber PhoneNumberType constant. Previously the parse failure
+		// cleared the filter list and type enforcement was skipped, so the number was accepted.
+		configMap.put("numberTypeFilters", "LANDLINE");
+		enroll(US_NUMBER);
+		assertRejected();
+		verify(form).setError("numberFormatNoMatchingFilters");
+	}
+
+	@Test
+	public void mixedValidAndInvalidNumberTypeFilterRejectedFailClosed() {
+		// A valid token plus an invalid one: the whole enrolment must be rejected, not fall through to
+		// "allow all" as it did when the catch cleared the entire list (including the valid MOBILE entry).
+		configMap.put("numberTypeFilters", "MOBILE##LANDLINE");
+		enroll(US_NUMBER);
+		assertRejected();
+		verify(form).setError("numberFormatNoMatchingFilters");
+	}
+
 	// --- Backward compatibility: no allowlist => no gate, any region enrols ---
 
 	@Test

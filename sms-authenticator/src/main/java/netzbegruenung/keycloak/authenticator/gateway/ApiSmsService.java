@@ -21,6 +21,7 @@
 
 package netzbegruenung.keycloak.authenticator.gateway;
 
+import java.io.IOException;
 import java.util.Map;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -101,7 +102,8 @@ public class ApiSmsService implements SmsService{
 
 		jsonTemplate = config.getOrDefault("jsonTemplate", "");
 
-		hideResponsePayload = Boolean.parseBoolean(config.get("hideResponsePayload"));
+		// Secure-by-default: redact the gateway's response body from logs unless an admin opts in.
+		hideResponsePayload = Boolean.parseBoolean(config.getOrDefault("hideResponsePayload", "true"));
 
 		getUrl = config.getOrDefault("getUrl", "");
 
@@ -122,67 +124,66 @@ public class ApiSmsService implements SmsService{
 			phoneNumber = phoneNumber.substring(1);
 		}
 		Builder requestBuilder;
-		HttpRequest request = null;
-		String requestPayload = null;
 		var client = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build();
+
+		if (getUrl != null && !getUrl.isBlank()) {
+			requestBuilder = getRequest(phoneNumber, message);
+		} else if (urlencode) {
+			requestBuilder = urlencodedRequest(phoneNumber, message);
+		} else {
+			requestBuilder = jsonRequest(getJsonBody(phoneNumber, message));
+		}
+
+		HttpRequest request;
+		if (apiTokenInHeader) {
+			request = requestBuilder.setHeader("Authorization", apitoken).build();
+		} else if (apiuser != null && !apiuser.isEmpty()) {
+			request = requestBuilder.setHeader("Authorization", getAuthHeader(apiuser, apitoken)).build();
+		} else {
+			request = requestBuilder.build();
+		}
+
+		HttpResponse<String> response;
 		try {
-			if (getUrl != null && !getUrl.isBlank()) {
-				requestBuilder = getRequest(phoneNumber, message);
-			} else {
-				if (urlencode) {
-					requestBuilder = urlencodedRequest(phoneNumber, message);
-				} else {
-					requestPayload = getJsonBody(phoneNumber, message);
-					requestBuilder = jsonRequest(requestPayload);
-				}
+			response = client.send(request, HttpResponse.BodyHandlers.ofString());
+		} catch (IOException | InterruptedException e) {
+			// Transport failure (connect/read timeout, connection refused, ...). Fail CLOSED: the caller
+			// turns this into the generic "SMS not sent" page rather than a code-entry form for a code
+			// that never left the server.
+			if (e instanceof InterruptedException) {
+				Thread.currentThread().interrupt();
 			}
-
-			if (apiTokenInHeader) {
-				request = requestBuilder.setHeader("Authorization", apitoken).build();
-			}else if (apiuser != null && !apiuser.isEmpty()) {
-				request = requestBuilder.setHeader("Authorization", getAuthHeader(apiuser, apitoken)).build();
-			} else {
-				request = requestBuilder.build();
-			}
-			HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-			int statusCode = response.statusCode();
-			String payload = hideResponsePayload ? "redacted" : "Response: " + response.body();
-
-			if (statusCode >= 200 && statusCode < 300) {
-				logger.infof("Sent SMS to %s [%s]", PhoneNumberLogMasker.forLog(phoneNumber, maskPhoneNumberInLogs), payload);
-			} else {
-				logErrorStatus(phoneNumber, payload, request, requestPayload, statusCode);
-			}
-		} catch (Exception e) {
-			logErrorException(phoneNumber, request, requestPayload);
+			logErrorException(phoneNumber, e);
+			throw new SmsDeliveryException("Failed to send SMS via gateway", e);
 		}
+
+		int statusCode = response.statusCode();
+		String payload = hideResponsePayload ? "redacted" : "Response: " + response.body();
+		if (statusCode >= 200 && statusCode < 300) {
+			logger.infof("Sent SMS to %s [%s]", PhoneNumberLogMasker.forLog(phoneNumber, maskPhoneNumberInLogs), payload);
+			return;
+		}
+		// Non-2xx: the gateway did not accept the message. Fail CLOSED so the OTP challenge is never
+		// shown for an undelivered code.
+		logErrorStatus(phoneNumber, payload, statusCode);
+		throw new SmsDeliveryException("SMS gateway returned non-success status " + statusCode);
 	}
 
-	private void logErrorStatus(String phoneNumber, String responsePayload, HttpRequest request, String requestPayload, int statusCode) {
-		String maskedPhone = PhoneNumberLogMasker.forLog(phoneNumber, maskPhoneNumberInLogs);
-		String logMessage = "Failed to send message to %s [%s] with request: %s [Status: %s]";
-		Object[] logParams = new Object[]{maskedPhone, responsePayload, request != null ? request.toString() : "null", statusCode};
+	// Error logs deliberately carry ONLY the masked phone, the HTTP status, and (behind the
+	// hideResponsePayload toggle, redacted by default) the gateway's response body. They must never
+	// include the request URI or request body: in GET mode the URI carries the OTP and API token as
+	// query parameters, and the JSON/urlencoded body carries the OTP, phone number, and token.
 
-		if (!urlencode && requestPayload != null) {
-			logMessage += ". Payload: %s";
-			logParams = new Object[]{maskedPhone, responsePayload, request != null ? request.toString() : "null", statusCode, requestPayload};
-		}
-		logMessage += ". Validate your config.";
-		logger.errorf(logMessage, logParams);
+	private void logErrorStatus(String phoneNumber, String responsePayload, int statusCode) {
+		logger.errorf("Failed to send message to %s [%s] [Status: %s]. Validate your config.",
+			PhoneNumberLogMasker.forLog(phoneNumber, maskPhoneNumberInLogs), responsePayload, statusCode);
 	}
 
-	private void logErrorException(String phoneNumber, HttpRequest request, String requestPayload) {
-		String maskedPhone = PhoneNumberLogMasker.forLog(phoneNumber, maskPhoneNumberInLogs);
-		String logMessage = "Failed to send message to %s with request: %s";
-		Object[] logParams = new Object[]{maskedPhone, request != null ? request.toString() : "null"};
-
-		if (!urlencode && requestPayload != null) {
-			logMessage += ". Payload: %s";
-			logParams = new Object[]{maskedPhone, request != null ? request.toString() : "null", requestPayload};
-		}
-		logMessage += ". Validate your config.";
-		logger.errorf(logMessage, logParams);
+	private void logErrorException(String phoneNumber, Exception e) {
+		// Log only the failure kind (e.g. HttpConnectTimeoutException), never the exception message,
+		// which can echo the gateway host/URL.
+		logger.errorf("Failed to send message to %s: %s. Validate your config.",
+			PhoneNumberLogMasker.forLog(phoneNumber, maskPhoneNumberInLogs), e.getClass().getSimpleName());
 	}
 
 	private String getJsonBody(String phoneNumber, String message) {

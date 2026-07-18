@@ -1,5 +1,9 @@
 # Security Audit — keycloak-mfa-plugins (SMS OTP focus)
 
+> This is a point-in-time audit record. The container, realm and test-harness names it references
+> (`fwc-kc`, `billpay-poc`, `sectest/retest.py`) belong to an external test environment and are not part
+> of this repository. The branches reviewed here have since been merged to `main` (PRs #4–#7).
+
 **Date:** 2026-07-09
 **Scope of this audit:** the bespoke Keycloak provider code in this repository, with primary focus on the **SMS OTP authenticator** (`sms-authenticator`), assessed for defensibility under **PCI DSS 4.0.1**. Secondary review of build/CI/dependency posture (Requirement 6).
 **Context:** this repository is a temporary staging repo; the code is being handed to a separate enterprise team in a separate repository. Findings are written to travel with the code.
@@ -10,7 +14,7 @@
 
 ## 1. Executive summary
 
-The SMS OTP authenticator is, on review, **well-built**: it uses `SecureRandom`-backed code generation, constant-time code comparison, one-time-use via code rotation, realm brute-force lockout on wrong codes, server-side resend throttling (cooldown + per-session ceiling + refresh throttling), non-enumerating error messages, and vault-aware gateway credentials. Several items initially flagged were, on closer inspection, **already correctly handled** and are reclassified as positive controls.
+The SMS OTP authenticator held up well under review: it uses `SecureRandom`-backed code generation, constant-time code comparison, one-time-use via code rotation, realm brute-force lockout on wrong codes, server-side resend throttling (cooldown + per-session ceiling + refresh throttling), non-enumerating error messages, and vault-aware gateway credentials. Several items initially flagged were, on closer inspection, already correctly handled and are reclassified as positive controls.
 
 Three concrete improvements were implemented on this branch, each secure-by-default and each with unit tests plus (where applicable) runtime before/after evidence:
 
@@ -143,7 +147,7 @@ The fixed jar loaded with no startup errors and completed a full enrollment (cho
 
 ---
 
-*Prepared for handover. Implemented changes live on branch `security/sms-pci-hardening`; see the commit for the diff and tests.*
+*Prepared for handover. The changes described in §3 were merged to `main` via PR #5; see the commits for the diffs and tests.*
 
 ---
 
@@ -171,7 +175,7 @@ rejected when `forceRetryOnBadFormat=true` — both default **false**. In every 
 whose region was not in the allowlist was stored and texted anyway (the `formatPhoneNumber==null` "reject"
 signal fell through). Enrolment is where the user chooses the destination number, so a configured allowlist
 gave **zero** protection in the default config — an SMS-pumping / toll-fraud primitive. Independently
-reported in `app-authenticator/SMS-REGION-ALLOWLIST-BYPASS.md` (now marked resolved).
+reported in [`sms-authenticator/SMS-REGION-ALLOWLIST-BYPASS.md`](sms-authenticator/SMS-REGION-ALLOWLIST-BYPASS.md) (now marked resolved).
 
 **Correction (implemented).** Refactored the region/type/validity logic into a shared
 `parseAndValidatePhoneNumber` + boolean `validateRegionAndType`, and added a standalone **fail-closed gate**

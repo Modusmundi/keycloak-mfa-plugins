@@ -35,7 +35,6 @@ import org.keycloak.authentication.RequiredActionFactory;
 import org.keycloak.authentication.RequiredActionProvider;
 import org.keycloak.events.Errors;
 import org.keycloak.forms.login.LoginFormsProvider;
-import org.keycloak.services.managers.AuthenticationManager;
 import org.keycloak.services.managers.BruteForceProtector;
 import org.keycloak.services.messages.Messages;
 import org.keycloak.credential.CredentialModel;
@@ -300,8 +299,7 @@ public class SmsAuthenticator implements Authenticator, CredentialValidator<SmsA
 		UserModel user = context.getUser();
 		if (realm.isBruteForceProtected() && user != null) {
 			context.getSession().getProvider(BruteForceProtector.class).failedLogin(
-				realm, user, context.getConnection(), context.getUriInfo(),
-				AuthenticationManager.getAuthenticationCategory(context.getSession(), context.getExecution().getId()));
+				realm, user, context.getConnection(), context.getUriInfo(), SmsCodeSender.BRUTE_FORCE_CATEGORIES);
 		}
 	}
 

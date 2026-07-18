@@ -122,16 +122,28 @@ public class ConditionalEnforceMfaAuthenticator implements Authenticator {
 
 		String action = decodedFormParameters.getFirst(FORM_PARAM_MFA_METHOD);
 
+		// SECURITY: validate the submitted method against the ENABLED + INSTALLED resolved set — the same
+		// set authenticate() renders — NOT the raw config list. Otherwise an attacker could POST a
+		// configured-but-disabled/uninstalled required action; Keycloak silently drops disabled required
+		// actions when it processes them, so context.success() below would complete the step with no MFA
+		// ever enrolled (an enforcement bypass).
 		List<String> offeredIds = EnforceMfaShared.splitMultivalued(authCfg.getConfig(), EnforceMfaShared.CONFIG_OFFERED);
-		if (offeredIds.stream().noneMatch(action::equals)) {
+		RequiredActionProviderModel selected = resolveOffered(context.getRealm(), offeredIds).stream()
+			.filter(m -> m.getProviderId().equals(action) || m.getAlias().equals(action))
+			.findFirst()
+			.orElse(null);
+		if (selected == null) {
+			LOG.warnf("conditional-enforce-mfa: rejected mfaMethod '%s' — not an enabled, installed offered action (realm=%s)",
+				action, context.getRealm().getName());
 			context.challenge(context.form().createErrorPage(Response.Status.BAD_REQUEST));
 			context.failure(AuthenticationFlowError.CREDENTIAL_SETUP_REQUIRED);
 			return;
 		}
 
 		AuthenticationSessionModel authenticationSession = context.getAuthenticationSession();
-		if (!authenticationSession.getRequiredActions().contains(action)) {
-			authenticationSession.addRequiredAction(action);
+		String canonical = selected.getProviderId();
+		if (!authenticationSession.getRequiredActions().contains(canonical)) {
+			authenticationSession.addRequiredAction(canonical);
 		}
 		context.success();
 	}

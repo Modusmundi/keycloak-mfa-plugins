@@ -1,14 +1,14 @@
 # Enforce MFA Authenticator
 
-Implementation of an MFA enforcement authenticator. After successful setup like described below the authenticator detects
-user with no second factor enabled and allows to choose a MFA method available in the current flow.
+Implementation of an MFA enforcement authenticator. After it is set up as described below, the authenticator detects
+users with no second factor enabled and lets them choose an MFA method available in the current flow.
 
 This implementation should not be confused with the ability to choose default MFA credentials, a feature which must be
 supported by the account console. For further information see https://github.com/keycloak/keycloak/issues/14340
 
 ## Scope of this authenticator
 
-This authenticator is an intermediate solution until keycloak can support flow configuration like the following:
+This authenticator is an intermediate solution until Keycloak can support flow configuration like the following:
 
 ```
 - 2ndlevel-subflow REQUIRED
@@ -16,9 +16,9 @@ This authenticator is an intermediate solution until keycloak can support flow c
 -- WebAuthn ALTERNATIVE
 ```
 
-The expected behaviour is, that the user either authenticates by one of the listed authenticators or chooses to set up
+The expected behaviour is that the user either authenticates by one of the listed authenticators or chooses to set up
 one of them.
-Actual behaviour is an authentication flow exception, when no MFA method is available.
+The actual behaviour is an authentication flow exception when no MFA method is available.
 
 See: https://github.com/keycloak/keycloak/discussions/19548
 

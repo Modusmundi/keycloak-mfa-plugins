@@ -352,24 +352,26 @@ public class PhoneNumberRequiredAction implements RequiredActionProvider, Creden
 		}
 
 		// apply ValidNumberType filters
-		// try to extract number types from filter string
-		List<PhoneNumberUtil.PhoneNumberType> numberTypeFilters = new ArrayList<>();
-		String numberFiltersString = null;
-		try {
-			numberFiltersString = cfg.getOrDefault("numberTypeFilters", "");
-			if (!numberFiltersString.isBlank()) {
+		// extract number types from the filter string
+		String numberFiltersString = cfg.getOrDefault("numberTypeFilters", "");
+		if (numberFiltersString != null && !numberFiltersString.isBlank()) {
+			List<PhoneNumberUtil.PhoneNumberType> numberTypeFilters = new ArrayList<>();
+			try {
 				numberFilterSplitter.splitToStream(numberFiltersString).forEach(filterString ->
-					numberTypeFilters.add(PhoneNumberUtil.PhoneNumberType.valueOf(filterString)));
+					numberTypeFilters.add(PhoneNumberUtil.PhoneNumberType.valueOf(filterString.trim())));
+			} catch (IllegalArgumentException e) {
+				// SECURITY (anti-toll-fraud): a malformed number-type allowlist must fail CLOSED. Previously
+				// the list was cleared and type enforcement silently skipped, so a disallowed (e.g.
+				// premium-rate) number would be accepted whenever the filter was misconfigured. Reject the
+				// enrolment instead; the admin sees the precise cause in the log below.
+				logger.errorf("Illegal numberTypeFilters config: %s. Rejecting enrolment (fail closed). Valid values are a "
+					+ "'##'-delimited list of FIXED_LINE, MOBILE, FIXED_LINE_OR_MOBILE, PAGER, TOLL_FREE, PREMIUM_RATE, "
+					+ "SHARED_COST, PERSONAL_NUMBER, VOIP, UAN, VOICEMAIL", numberFiltersString);
+				context.getAuthenticationSession().setAuthNote("formatError", "numberFormatNoMatchingFilters");
+				return null;
 			}
-		} catch (Exception e) {
-			// if the number type filter configuration is bad, log an error and continue without filtering
-			logger.errorf("Illegal filter found: %s. Filter must be a list of comma delimited Strings of FIXED_LINE, MOBILE, "
-				+ "FIXED_LINE_OR_MOBILE, PAGER, TOLL_FREE, PREMIUM_RATE, SHARED_COST, PERSONAL_NUMBER, VOIP, UAN, VOICEMAIL", numberFiltersString);
-			numberTypeFilters.clear();
-		}
 
-		// check to see if the number type matches any of the filters set
-		if (!numberTypeFilters.isEmpty()) {
+			// check to see if the number type matches any of the filters set
 			PhoneNumberUtil.PhoneNumberType numberType = phoneNumberUtil.getNumberType(originalPhoneNumberParsed);
 			if (numberTypeFilters.stream().noneMatch(filter -> filter == numberType)) {
 				logger.errorf("Phone number type %s does not match any filters in %s", numberType.toString(), numberTypeFilters);

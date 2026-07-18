@@ -32,7 +32,6 @@ import org.keycloak.credential.CredentialTypeMetadata;
 import org.keycloak.credential.CredentialTypeMetadataContext;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
-import org.keycloak.models.UserCredentialModel;
 import org.keycloak.models.UserModel;
 import java.util.*;
 import java.util.stream.Stream;
@@ -47,19 +46,13 @@ public class SmsAuthCredentialProvider implements CredentialProvider<SmsAuthCred
 
     @Override
     public boolean isValid(RealmModel realm, UserModel user, CredentialInput input) {
-        if (!(input instanceof UserCredentialModel)) {
-            return false;
-        }
-        if (!input.getType().equals(getType())) {
-            return false;
-        }
-        String challengeResponse = input.getChallengeResponse();
-        if (challengeResponse == null) {
-            return false;
-        }
-        CredentialModel credentialModel = user.credentialManager().getStoredCredentialById(input.getCredentialId());
-        SmsAuthCredentialModel sqcm = getCredentialFromModel(credentialModel);
-        return sqcm.getSmsAuthenticatorData().getMobileNumber().equals(challengeResponse);
+        // The mobile-number credential stores a destination (the phone number), not a verifiable secret.
+        // OTP verification happens elsewhere: SmsAuthenticator / PhoneValidationRequiredAction compare the
+        // transient auth-note code with MessageDigest.isEqual. This validator therefore fails CLOSED — it
+        // must never treat the stored phone number as a matchable credential value, which would let anyone
+        // who knows the (guessable, non-secret) number satisfy a generic CredentialInputValidator path
+        // such as direct grant.
+        return false;
     }
 
     @Override

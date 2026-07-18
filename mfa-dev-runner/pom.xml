@@ -17,16 +17,6 @@
 		</dependency>
 		<dependency>
 			<groupId>netzbegruenung</groupId>
-			<artifactId>email-authenticator</artifactId>
-			<version>${project.version}</version>
-		</dependency>
-		<dependency>
-			<groupId>netzbegruenung</groupId>
-			<artifactId>app-authenticator</artifactId>
-			<version>${project.version}</version>
-		</dependency>
-		<dependency>
-			<groupId>netzbegruenung</groupId>
 			<artifactId>enforce-mfa</artifactId>
 			<version>${project.version}</version>
 		</dependency>

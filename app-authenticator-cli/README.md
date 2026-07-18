@@ -1,24 +1,32 @@
 # App Authenticator CLI
 
-This is a reference implementation for the client-side logic of the App Authenticator.
+> **Status: not maintained.** Like its server-side counterpart, the [App
+> Authenticator](../app-authenticator/README.md), this reference client is kept in the tree for
+> reference only.
 
-## Signature Tokens
+A Node.js reference implementation of the client-side logic of the [App Authenticator](../app-authenticator/README.md), useful for exercising the API without a mobile app.
 
-The API endpoints require an authentication mechanism that leverages client-side generated keypairs. While drafts for HTTP Message Signatures exist, they are no well-established standards.
-[draft-ietf-httpbis-message-signatures](https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-message-signatures).
+## Usage
 
-Instead of implementing concepts from this unfinished draft, the API uses client-side generated JSON Web Tokens (JWTs) as a form of request signature. The JWTs are signed using a private key stored on the client and transmitted in the `x-signature` header.
+```shell
+npm install
+node authenticator.js setup   # register a new authenticator from an activation token URL
+node authenticator.js auth    # poll for a pending login challenge and accept or reject it
+```
 
-The client should use the authenticator id as the `kid` claim and use an asymmetric signature algorithm. The acceptable algorithms are:
+`setup` prompts for the activation token URL shown in the Keycloak account console, generates an asymmetric keypair and registers the authenticator. `auth` fetches an open login challenge and replies to it. The generated keys and IDs are stored in `data.json` next to the script.
 
--   `PS512` with an `RSASSA-PSS` asymmetric key
--   `ES512` with an `EC` asymmetric key
+## Request signing
 
-The JWT payload should contain:
+The server authenticates API requests with a custom `Signature` HTTP header, a comma-separated list of `key:value` pairs:
 
--   The user id as `sub` claim, which the client can extract from the `sub` claim of the action token issued by Keycloak via the activation token URL.
--   An expiration time of approximately 30 seconds to mitigate replay attacks.
--   A UUID for the JWT in the `jti` claim, which can be used to implement one-time tokens. The token id should be stored on the Keycloak side at least until the token expires.
--   A `typ` claim similar to the Keycloak action tokens, containing a value for the corresponding endpoint or action, e.g., `get-challenges`.
--   Any additional request parameters that need to be signed.
+-   `keyId`: the authenticator ID chosen at setup, which identifies the registered public key.
+-   `created`: the signing timestamp in milliseconds. The server rejects timestamps more than 10 seconds in the future.
+-   `secret` and `granted`: only when replying to a login challenge — the challenge value and whether the login was approved.
+-   `signature`: the Base64-encoded signature over the other pairs, created with the private key generated at setup.
 
+For fetching challenges and updating the push ID, the signed data is the `created` pair; for challenge replies it is the `created`, `secret` and `granted` pairs. The endpoint reference, including a full header example, is in the [App Authenticator README](../app-authenticator/README.md#authentication).
+
+The keypair uses one of the Java platform's standard [KeyFactory](https://docs.oracle.com/en/java/javase/17/docs/specs/security/standard-names.html#keyfactory-algorithms) and [Signature](https://docs.oracle.com/en/java/javase/17/docs/specs/security/standard-names.html#signature-algorithms) algorithms; the public key is registered X.509-encoded during setup.
+
+Note: `authenticator.js` still signs requests with a JWT in an `x-signature` header, an earlier scheme the current server no longer accepts. The script needs to be ported to the `Signature` header format before it can talk to a current server.

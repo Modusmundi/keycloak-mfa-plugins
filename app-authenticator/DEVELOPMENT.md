@@ -1,8 +1,8 @@
 # Development Notes
 
--   The API is based on Keycloaks Action Token Handler to "implement any functionality that initiates or modifies authentication session using action token handler SPI" (Ref. <https://www.keycloak.org/docs/latest/server_development/index.html#_action_token_handler_spi>)
--   HTTP respones from action token endpoints cannot be modified. They always return HTML
--   The status code can be modifierd but the response body will be empty
+-   The API is based on Keycloak's Action Token Handler to "implement any functionality that initiates or modifies authentication session using action token handler SPI" (Ref. <https://www.keycloak.org/docs/latest/server_development/index.html#_action_token_handler_spi>)
+-   HTTP responses from action token endpoints cannot be modified. They always return HTML
+-   The status code can be modified but the response body will be empty
 
 -   Public Key is assumed to be encoded according to the X.509 standard: https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/security/spec/X509EncodedKeySpec.html
 
