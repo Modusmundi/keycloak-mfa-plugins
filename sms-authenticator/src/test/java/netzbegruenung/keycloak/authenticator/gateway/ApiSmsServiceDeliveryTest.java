@@ -112,7 +112,7 @@ public class ApiSmsServiceDeliveryTest {
 	@Test
 	public void errorLogsNeverLeakOtpPhoneOrToken() {
 		// ApiSmsService logs under the SmsServiceFactory category (see its logger field).
-		Logger jul = Logger.getLogger("netzbegruenung.keycloak.authenticator.gateway.SmsServiceFactory");
+		Logger jul = Logger.getLogger(SmsServiceFactory.class.getName());
 		List<String> captured = new ArrayList<>();
 		Handler handler = new Handler() {
 			@Override public void publish(LogRecord r) {

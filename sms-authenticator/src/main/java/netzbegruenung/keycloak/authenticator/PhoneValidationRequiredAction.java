@@ -173,7 +173,7 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 	 * Records a failed enrollment-validation attempt with the realm brute-force protector so repeated
 	 * wrong codes count toward lockout. The SMS code is reported under the "otp" category
 	 * ({@link SmsCodeSender#BRUTE_FORCE_CATEGORIES}) because Keycloak (>= 26.7) only counts failures in
-	 * an allow-list of categories; a null/other category would be ignored (and null now NPEs).
+	 * an allow-list of categories; a null or other category would not be counted.
 	 */
 	private void recordBruteForceFailure(RequiredActionContext context) {
 		RealmModel realm = context.getRealm();
