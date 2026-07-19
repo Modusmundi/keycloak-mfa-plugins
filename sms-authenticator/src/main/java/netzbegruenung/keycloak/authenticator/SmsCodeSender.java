@@ -22,7 +22,6 @@ package netzbegruenung.keycloak.authenticator;
 
 import netzbegruenung.keycloak.authenticator.gateway.SmsServiceFactory;
 
-import org.jboss.logging.Logger;
 import org.keycloak.common.util.SecretGenerator;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
@@ -48,8 +47,6 @@ import java.util.Set;
  * refreshes cannot be used to spam SMS sends either.
  */
 final class SmsCodeSender {
-
-	private static final Logger logger = Logger.getLogger(SmsCodeSender.class);
 
 	/** Bounds for the generated OTP so a misconfigured 'length'/'ttl' cannot yield a trivially weak code. */
 	static final int MIN_CODE_LENGTH = 6;
@@ -122,28 +119,13 @@ final class SmsCodeSender {
 	}
 
 	/**
-	 * Parses an integer config value and clamps it into [{@code min}, {@code max}], falling back to
-	 * {@code fallback} when absent or non-numeric. Guards against a misconfigured OTP length/TTL —
-	 * e.g. a 1-digit code or a multi-day validity window — without breaking a working config.
+	 * Parses an integer config value (via {@link #intConfig}, which falls back to {@code fallback} when
+	 * the value is absent, blank, non-numeric, or negative) and clamps the result into
+	 * [{@code min}, {@code max}]. Guards against a misconfigured OTP length/TTL — e.g. a 1-digit code or
+	 * a multi-day validity window — without breaking a working config.
 	 */
 	private static int boundedConfig(Map<String, String> config, String key, int min, int max, int fallback) {
-		String raw = config == null ? null : config.get(key);
-		int value;
-		try {
-			value = Integer.parseInt(raw.trim());
-		} catch (NumberFormatException | NullPointerException e) {
-			logger.warnf("SMS OTP config '%s' is missing or not a number; using default %d", key, fallback);
-			return fallback;
-		}
-		if (value < min) {
-			logger.warnf("SMS OTP config '%s'=%d is below the minimum %d; clamping to %d", key, value, min, min);
-			return min;
-		}
-		if (value > max) {
-			logger.warnf("SMS OTP config '%s'=%d is above the maximum %d; clamping to %d", key, value, max, max);
-			return max;
-		}
-		return value;
+		return Math.min(max, Math.max(min, intConfig(config, key, fallback)));
 	}
 
 	/** Minimum seconds between sends in one auth session; 0 disables the cooldown. */
