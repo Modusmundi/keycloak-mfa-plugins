@@ -4,10 +4,31 @@ Notable changes to this repository. Versions up to `v26.6.5` come from the upstr
 [netzbegruenung/keycloak-mfa-plugins](https://github.com/netzbegruenung/keycloak-mfa-plugins) project;
 the `v26.6.5-fwc.*` tags are releases of this fork.
 
-## Unreleased
+## Unreleased — v26.7.0-fwc.1
 
+Targets Keycloak 26.7.0. Module versions move from `26.6.5` to `26.7.0` to track the platform.
+
+- sms: fail closed on gateway delivery failure — a non-2xx response or transport error now raises
+  `SmsDeliveryException`, and no call site presents a code-entry form for an SMS that never went out
+- sms: the resend cooldown clock and the per-session resend ceiling count send *attempts*, not
+  successes. A gateway that accepts and then times out previously left no throttle state, so every
+  retry re-entered the unthrottled first-send path (unbounded outbound SMS / toll fraud)
+- sms: a failed send invalidates any previously issued code, so an earlier code can no longer
+  authorise a newly entered destination number
+- sms: gateway error logging no longer echoes the exception message or cause chain at the call sites
+  in `PhoneValidationRequiredAction`, which had defeated the host/URL redaction done at the throw site
+- sms: report failed SMS codes to the brute-force protector as the `otp` category — Keycloak 26.7
+  only counts categories in an allow-list, so the previous value was silently dropped and lockout
+  did not engage for the SMS factor
+- sms: `hideResponsePayload` now defaults to on. Realms configured before this change have the old
+  value persisted and must be updated in realm config; a code default does not reach them
+- enforce-mfa: an offered credential id that mapped to nothing was treated as satisfied for every
+  fresh user, which skipped the whole enrollment step; unmapped ids no longer satisfy it
+- enforce-mfa: match credentials by type rather than provider id
 - build: drop the undeployed `email-authenticator` and `app-authenticator` modules from the Maven
   build, the dev runner and releases; their source stays in the tree as unmaintained reference code
+- release: gate publication on the build, SAST (OpenGrep) and SCA (Trivy) workflows; assert exactly
+  the two provider jars reach the signing stage; sign the SBOM alongside the jars
 - docs: overhaul of all module READMEs, security docs relocated and condensed, SECURITY.md and this
   changelog added
 

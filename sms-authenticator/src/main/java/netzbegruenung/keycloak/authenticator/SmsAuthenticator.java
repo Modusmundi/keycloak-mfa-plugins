@@ -216,9 +216,11 @@ public class SmsAuthenticator implements Authenticator, CredentialValidator<SmsA
 		}
 
 		try {
+			// Burn the resend allowance before the attempt: a failing gateway must not hand out free
+			// retries, or the ceiling never engages and the send loop is unbounded.
+			authSession.setAuthNote(SmsCodeSender.NOTE_RESEND_COUNT, String.valueOf(used + 1));
 			SmsCodeSender.sendCode(context.getSession(), context.getRealm(), context.getUser(),
 				authSession, cfg, mobileNumber(context));
-			authSession.setAuthNote(SmsCodeSender.NOTE_RESEND_COUNT, String.valueOf(used + 1));
 			// Rides the terminal LOGIN/LOGIN_ERROR event so resend usage is visible in the audit trail.
 			context.getEvent().detail("sms_resend_count", String.valueOf(used + 1));
 			logger.infof("SMS code resent for user %s (resend %d of %d)", context.getUser().getUsername(), used + 1, max);

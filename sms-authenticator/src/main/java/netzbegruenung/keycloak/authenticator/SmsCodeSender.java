@@ -68,8 +68,8 @@ final class SmsCodeSender {
 	 * (>= 26.7) only counts a failed login toward lockout when its category is in an allow-list
 	 * (password, otp, recovery-authn-codes). The SMS authenticator's own reference category
 	 * ("mobile-number") is not on that list, so a failed SMS code is reported as "otp" — it is a
-	 * one-time password — to keep brute-force lockout working. Passing an empty/other category (or the
-	 * pre-26.7 {@code null}) would silently disable lockout for the SMS factor.
+	 * one-time password — to keep brute-force lockout working. Reporting a category outside the
+	 * allow-list silently disables lockout for the SMS factor.
 	 */
 	static final Set<String> BRUTE_FORCE_CATEGORIES = Set.of("otp");
 
@@ -89,12 +89,19 @@ final class SmsCodeSender {
 	}
 
 	/**
-	 * Generates a fresh code and sends the SMS through the configured gateway, then — only once the
-	 * gateway has accepted delivery — overwrites the code/ttl auth notes (invalidating any earlier
-	 * code) and records the send timestamp. Persisting the challenge state <em>after</em> the send
-	 * means a delivery failure (which the gateway surfaces as an exception) fails closed: no usable
-	 * code note is stored and the caller shows the "SMS not sent" page rather than a code-entry form
-	 * for an SMS that never went out.
+	 * Generates a fresh code and sends the SMS through the configured gateway, failing closed on both
+	 * halves of the problem.
+	 *
+	 * <p>Before the send: any earlier code is invalidated and the send timestamp is recorded. The
+	 * timestamp is the rate-limit clock, so it must count <em>attempts</em>, not successes — a gateway
+	 * that accepts and then times out would otherwise leave no throttle state, and every retry would
+	 * re-enter the unthrottled first-send path (unbounded outbound SMS, i.e. toll fraud). Clearing the
+	 * code first means a failed send cannot leave a previously issued code usable for a number that
+	 * never received one.
+	 *
+	 * <p>After the send: the code/ttl notes are written only once the gateway has accepted delivery,
+	 * so a failure leaves no usable code and the caller shows the "SMS not sent" page rather than a
+	 * code-entry form for an SMS that never went out.
 	 */
 	static void sendCode(KeycloakSession session, RealmModel realm, UserModel user,
 			AuthenticationSessionModel authSession, Map<String, String> config,
@@ -109,13 +116,18 @@ final class SmsCodeSender {
 		String smsAuthText = theme.getEnhancedMessages(realm, locale).getProperty("smsAuthText");
 		String smsText = String.format(smsAuthText, code, Math.floorDiv(ttl, 60));
 
-		// Send first — a failure here throws and no challenge state is persisted (fail closed).
+		// Invalidate any earlier code and start the rate-limit clock before attempting the send, so a
+		// failing gateway still throttles the retry and cannot leave a stale code live.
+		long now = System.currentTimeMillis();
+		authSession.removeAuthNote(NOTE_CODE);
+		authSession.removeAuthNote(NOTE_TTL);
+		authSession.setAuthNote(NOTE_LAST_SENT_AT, Long.toString(now));
+
 		SmsServiceFactory.get(config, session).send(mobileNumber, smsText);
 
-		long now = System.currentTimeMillis();
+		// Only a delivered code becomes usable.
 		authSession.setAuthNote(NOTE_CODE, code);
 		authSession.setAuthNote(NOTE_TTL, Long.toString(now + (ttl * 1000L)));
-		authSession.setAuthNote(NOTE_LAST_SENT_AT, Long.toString(now));
 	}
 
 	/**

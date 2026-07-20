@@ -92,7 +92,9 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 
 			context.challenge(smsForm(context, cfg).createForm(SmsAuthenticator.TPL_CODE));
 		} catch (Exception e) {
-			logger.error(e.getMessage(), e);
+			// See the resend path: the gateway host/URL is redacted at the throw site, so neither the
+			// message nor the cause chain may be logged here.
+			logger.error("SMS validation code send failed");
 			context.failure();
 		}
 	}
@@ -240,16 +242,20 @@ public class PhoneValidationRequiredAction implements RequiredActionProvider, Cr
 		}
 
 		try {
+			// Burn the resend allowance before the attempt: a failing gateway must not hand out free
+			// retries, or the ceiling never engages and the send loop is unbounded.
+			authSession.setAuthNote(SmsCodeSender.NOTE_RESEND_COUNT, String.valueOf(used + 1));
 			SmsCodeSender.sendCode(context.getSession(), context.getRealm(), context.getUser(),
 				authSession, cfg, mobileNumber);
-			authSession.setAuthNote(SmsCodeSender.NOTE_RESEND_COUNT, String.valueOf(used + 1));
 			context.getEvent().detail("sms_resend_count", String.valueOf(used + 1));
 			logger.infof("SMS validation code resent for user %s (resend %d of %d)",
 				context.getUser().getUsername(), used + 1, max);
 			context.challenge(smsForm(context, cfg).setInfo("smsAuthCodeResent")
 				.createForm(SmsAuthenticator.TPL_CODE));
 		} catch (Exception e) {
-			logger.error(e.getMessage(), e);
+			// Message and cause chain stay out of the log: ApiSmsService deliberately redacts the
+			// gateway host/URL from what it throws, and echoing them here would defeat that.
+			logger.error("SMS validation code resend failed");
 			context.failure();
 		}
 	}

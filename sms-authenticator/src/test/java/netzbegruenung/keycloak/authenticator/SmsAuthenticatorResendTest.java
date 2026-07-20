@@ -100,6 +100,8 @@ public class SmsAuthenticatorResendTest {
 		doAnswer(i -> notes.put(i.getArgument(0), i.getArgument(1)))
 			.when(authSession).setAuthNote(anyString(), anyString());
 		when(authSession.getAuthNote(anyString())).thenAnswer(i -> notes.get(i.getArgument(0)));
+		doAnswer(i -> notes.remove(i.getArgument(0)))
+			.when(authSession).removeAuthNote(anyString());
 
 		// Stored mobile-number credential (fresh stream per call).
 		CredentialModel credential = new CredentialModel();
@@ -254,5 +256,49 @@ public class SmsAuthenticatorResendTest {
 		assertNotNull(notes.get(SmsCodeSender.NOTE_CODE), "refresh after the cooldown re-sends");
 		assertEquals("1", notes.get(SmsCodeSender.NOTE_RESEND_COUNT), "refresh re-send counts toward the ceiling");
 		verify(context).challenge(any(Response.class));
+	}
+
+	/**
+	 * Points the gateway at a closed local port so the send genuinely throws, instead of the
+	 * simulation lambda every other test here uses. Without a real failure path the throttle
+	 * regression this guards against is invisible.
+	 */
+	private void useFailingGateway() {
+		configMap.put("simulation", "false");
+		configMap.put("apiurl", "https://127.0.0.1:1/sms");
+		configMap.put("messageattribute", "message");
+		configMap.put("receiverattribute", "to");
+	}
+
+	@Test
+	public void failedResendStillBurnsCooldownAndAllowance() {
+		useFailingGateway();
+		notes.put(SmsCodeSender.NOTE_CODE, "111111");
+		notes.put(SmsCodeSender.NOTE_LAST_SENT_AT, String.valueOf(System.currentTimeMillis() - 61_000));
+
+		postResend();
+
+		// The rate-limit clock and the resend counter must count attempts, not successes. If either
+		// is only written on success, a failing-but-delivering gateway becomes an unbounded send loop.
+		long lastSent = Long.parseLong(notes.get(SmsCodeSender.NOTE_LAST_SENT_AT));
+		assertEquals(0, Math.max(0, System.currentTimeMillis() - lastSent) / 10_000,
+			"a failed send must still start the cooldown");
+		assertEquals("1", notes.get(SmsCodeSender.NOTE_RESEND_COUNT),
+			"a failed send must still consume the resend allowance");
+	}
+
+	@Test
+	public void failedSendLeavesNoUsableCode() {
+		useFailingGateway();
+		notes.put(SmsCodeSender.NOTE_CODE, "111111");
+		notes.put(SmsCodeSender.NOTE_LAST_SENT_AT, String.valueOf(System.currentTimeMillis() - 61_000));
+
+		postResend();
+
+		// The prior code must not survive a failed send: the number now on file may never have
+		// received it, which would let an earlier code authorise a newly entered destination.
+		assertNull(notes.get(SmsCodeSender.NOTE_CODE),
+			"a failed send must invalidate the previously issued code");
+		assertNull(notes.get(SmsCodeSender.NOTE_TTL));
 	}
 }
