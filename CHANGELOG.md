@@ -4,6 +4,12 @@ Notable changes to this repository. Versions up to `v26.6.5` come from the upstr
 [netzbegruenung/keycloak-mfa-plugins](https://github.com/netzbegruenung/keycloak-mfa-plugins) project;
 the `v26.6.5-fwc.*` tags are releases of this fork.
 
+## v26.8.2-fwc.1 — 2026-11-27
+
+Targets Keycloak 26.8.2 (Quarkus 3.40.1.1), a security release. Version-only bump: project and module
+versions `26.8.1` -> `26.8.2`, `keycloak.version` and `quarkus.version` follow the platform. No upstream
+code is merged. Jars become `netzbegruenung.{sms-authenticator,enforce-mfa}-v26.8.2.jar`.
+
 ## v26.8.1-fwc.1 — 2026-10-30
 
 Targets Keycloak 26.8.1 (Quarkus 3.40.1). Version-only bump: project and module versions `26.7.4` ->
